@@ -8,7 +8,7 @@ from .services import check_unique_claim_code
 from .utils import check_status_permission, get_user_permitted_statuses
 import django
 from core.schema import signal_mutation_module_validate, signal_mutation_module_after_mutating
-from django.db.models import OuterRef, Subquery, Avg, Q
+from django.db.models import OuterRef, Subquery, Avg, Q, Sum
 import graphene_django_optimizer as gql_optimizer
 from core.schema import OrderedDjangoFilterConnectionField, OfficerGQLType
 from core import filter_validity
@@ -19,6 +19,7 @@ from django.utils.translation import gettext as _
 from graphene_django.filter import DjangoFilterConnectionField
 import ast
 from django.core.exceptions import PermissionDenied
+from graphql_relay import from_global_id
 
 # We do need all queries and mutations in the namespace here.
 from .gql_queries import *  # lgtm [py/polluting-import]
@@ -79,6 +80,13 @@ class Query(graphene.ObjectType):
     claim_attachment_type = DjangoFilterConnectionField(
         ClaimAttachmentTypeGQLType
     )
+
+    approved_claims_summary_by_hf = graphene.Field(
+        ClaimSummaryGQLType,
+        hf_id=graphene.ID(required=True),
+        description="Return approved claims count and total approved amount for a given health facility"
+    )
+
 
     def resolve_insuree_name_by_chfid(self, info, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_mutation_create_claims_perms)\
@@ -240,6 +248,33 @@ class Query(graphene.ObjectType):
                                   validity_to__isnull=True).order_by("date_claimed")
         return qs
 
+    def resolve_approved_claims_summary_by_hf(self, info, hf_id, **kwargs):
+        user = info.context.user
+        if (
+            not user.has_perms(ClaimConfig.gql_query_claims_perms)
+            or
+            not user.has_perms(ClaimConfig.gql_query_claims_valuated_perms)
+        ):
+            raise PermissionDenied(_("unauthorized"))
+
+        _type, db_id = from_global_id(hf_id)
+        db_id = int(db_id)
+
+        APPROVED_STATUS = Claim.STATUS_VALUATED
+
+        qs = Claim.objects.filter(
+            health_facility_id=db_id,
+            status=APPROVED_STATUS,
+            validity_to__isnull=True
+        )
+        summary = qs.aggregate(
+            count=Count("id"),
+            total_approved=Sum("approved")
+        )
+        return ClaimSummaryGQLType(
+            count=summary["count"] or 0,
+            total_approved=summary["total_approved"] or 0
+        )
 
 class Mutation(graphene.ObjectType):
     create_claim = CreateClaimMutation.Field()

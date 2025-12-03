@@ -195,3 +195,7 @@ class ClaimServiceItemGQLType(DjangoObjectType):
 
     class Meta:
         model = ClaimServiceItem
+
+class ClaimSummaryGQLType(graphene.ObjectType):
+    count = graphene.Int()
+    total_approved = graphene.Float()
