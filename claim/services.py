@@ -803,7 +803,7 @@ def update_claims_status(
             claim.save_history()
             setattr(claim, field, status)
             if status == Claim.STATUS_REJECTED:
-                claim.rejection_reason = rejection_code
+                claim.rejection_reason = int(rejection_code)
                 claim.rejection_note = rejection_note
 
             claim.audit_user_id = user.user.id_for_audit

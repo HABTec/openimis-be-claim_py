@@ -1029,7 +1029,7 @@ class ChangeClaimsStatusMutation(OpenIMISMutation):
     class Input(OpenIMISMutation.Input):
         uuids = graphene.List(graphene.String)
         status = graphene.Int()
-        rejection_code = graphene.String(required=False)
+        rejection_code = graphene.Int(required=False)
         rejection_note = graphene.String(required=False)
 
     @classmethod
