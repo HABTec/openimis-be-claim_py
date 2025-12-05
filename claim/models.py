@@ -257,7 +257,7 @@ class ReturnedClaim(models.Model):
     returned_date = fields.DateTimeField(db_column='ReturnedDate')
     audit_user_id = models.IntegerField(db_column='AuditUserID')
     reason = models.TextField(db_column='Reason', blank=True, null=True)
-    predefined_reason = models.TextField(db_column='PredefinedReason')
+    predefined_reason = models.PositiveSmallIntegerField(db_column='PredefinedReason')
     return_type = models.IntegerField(db_column='ReturnType')
     class Meta:
         managed = True

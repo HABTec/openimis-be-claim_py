@@ -50,7 +50,24 @@ DEFAULT_CFG = {
     "additional_diagnosis_number_allowed": 4,
     "claim_max_restore": None,
     "allowed_domains_attachments": [],
-    "verify_quantities": False
+    "verify_quantities": False,
+    "return_reasons":[{
+        "code": 1,
+        "name": "Invalid Item or Service"
+    },{
+        "code": 2,
+        "name": "Not in Price List"
+    },{
+        "code": 3,
+        "name": "No Product Found"
+    },{
+        "code": 4,
+        "name": "Category Limitation"
+    },{
+        "code": 5,
+        "name": "Frequency Failure"
+    }]
+
 }
 
 
@@ -107,7 +124,9 @@ class ClaimConfig(AppConfig):
     # Provide absolute path to autogenerating function for claim code
     autogenerate_func = None
     additional_diagnosis_number_allowed = None  # Currently code supports 4 diagnoses maximum, going above will not work
-    allowed_domains_attachments = None
+    allowed_domains_attachments = None,
+    
+    return_reasons = []
 
     def __load_config(self, cfg):
         for field in cfg:
