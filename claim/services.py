@@ -786,33 +786,45 @@ def update_claims_dedrems(uuids, user, claims=None):
             "claim.validation.id_does_not_exist") % {'id': ','.join(remaining_uuid)})
     return errors
 
-def update_claims_status(uuids, field, status, user):
+def update_claims_status(
+    uuids, field, status, user,
+    rejection_code=None,
+    rejection_note=None
+):
     errors = []
-    claims = Claim.objects \
-            .filter(uuid__in=uuids,
-                    *filter_validity())
+    claims = Claim.objects.filter(
+        uuid__in=uuids,
+        *filter_validity()
+    )
     remaining_uuid = list(set(map(str.upper, uuids)))
     for claim in claims:
         remaining_uuid.remove(claim.uuid.upper())
         try:
             claim.save_history()
             setattr(claim, field, status)
+            if status == Claim.STATUS_REJECTED:
+                claim.rejection_reason = int(rejection_code)
+                claim.rejection_note = rejection_note
+
             claim.audit_user_id = user.user.id_for_audit
             claim.save()
+
         except Exception as exc:
-            errors += [
-                {'message': _("claim.mutation.failed_to_change_status_of_claim") %
-                            {'code': claim.code} }
-            ]
-            if hasattr(exc, 'messages') and len(exc.messages):
+            errors.append({
+                'message': _("claim.mutation.failed_to_change_status_of_claim") %
+                           {'code': claim.code}
+            })
+            if hasattr(exc, "messages"):
                 for m in exc.messages:
-                    errors.append({'message': m })
-            elif hasattr(exc, 'args') and len(exc.args):
+                    errors.append({'message': m})
+            else:
                 for m in exc.args:
-                    errors.append({'message': m })
-    if len(remaining_uuid):
-        errors += [
-            {'message': _("claim.validation.id_does_not_exist") % {'id': ','.join(remaining_uuid)}}
-        ]
+                    errors.append({'message': m})
+
+    if remaining_uuid:
+        errors.append({
+            'message': _("claim.validation.id_does_not_exist") %
+                       {'id': ','.join(remaining_uuid)}
+        })
 
     return errors

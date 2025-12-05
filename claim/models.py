@@ -113,6 +113,8 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
         db_column='ApprovalStatus', blank=True, null=True, default=1)
     rejection_reason = models.SmallIntegerField(
         db_column='RejectionReason', blank=True, null=True, default=0)
+    rejection_note = models.TextField(
+        db_column='RejectionNote', blank=True, null=True, help_text="Additional information about the rejection reason")
 
     batch_run = models.ForeignKey(claim_batch_models.BatchRun,
                                   models.DO_NOTHING, db_column='RunID', blank=True, null=True)
