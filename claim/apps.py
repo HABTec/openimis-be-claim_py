@@ -50,7 +50,26 @@ DEFAULT_CFG = {
     "additional_diagnosis_number_allowed": 4,
     "claim_max_restore": None,
     "allowed_domains_attachments": [],
-    "verify_quantities": False
+    "verify_quantities": False,
+    "return_reasons":[
+        {
+            "code": 1,
+            "name": "Missing Documents"
+        },
+        {
+            "code": 2,
+            "name": "Incorrect Diagnosis Code"
+        },
+        {
+            "code": 3,
+            "name": "Service or Item mismatch"
+        },
+        {
+            "code": 4,
+            "name": "Insufficient Details"
+        }
+    ]
+
 }
 
 
@@ -108,6 +127,7 @@ class ClaimConfig(AppConfig):
     autogenerate_func = None
     additional_diagnosis_number_allowed = None  # Currently code supports 4 diagnoses maximum, going above will not work
     allowed_domains_attachments = None
+    return_reasons = []
 
     def __load_config(self, cfg):
         for field in cfg:
