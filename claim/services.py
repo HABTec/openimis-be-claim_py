@@ -27,6 +27,7 @@ from claim.utils import (
 )
 from .validations import validate_claim, validate_assign_prod_to_claimitems_and_services, process_dedrem, \
     approved_amount, get_claim_category
+from .utils import validate_status_transition, check_initial_status_permission
 from django.db.models import Subquery, F, OuterRef, Sum, FloatField
 from django.db.models.functions import Coalesce
 from django.contrib.auth.models import AnonymousUser
@@ -224,6 +225,8 @@ class ClaimSubmitService(object):
         """
         self._validate_submit_permissions()
         self._validate_user_hf(claim.health_facility.code)
+        validate_status_transition(claim.status, Claim.STATUS_CHECKED, self.user)
+        check_initial_status_permission(claim.status, self.user)
         claim.save_history()
         validation_errors = processing_claim(claim, self.user, False, rule_engine_validation)
         if validation_errors:

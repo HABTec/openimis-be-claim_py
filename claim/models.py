@@ -187,7 +187,7 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
 
     STATUS_REJECTED = 1
     STATUS_ENTERED = 2
-    STATUS_CHECKED = 4
+    STATUS_CHECKED = 4 # submitted to branch
     STATUS_PROCESSED = 8
     STATUS_VALUATED = 16
     STATUS_RETURNED_FROM_FACILITY = 17
@@ -196,6 +196,7 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
     STATUS_RESUBMITTED_TO_HEAD = 20
     STATUS_RESUBMITTED_TO_BRANCH = 21
     STATUS_FLAGGED = 22
+    STATUS_REIMBURSED = 23
     
 
     FEEDBACK_IDLE = 1
