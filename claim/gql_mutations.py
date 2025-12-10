@@ -32,7 +32,7 @@ from claim.attachment_strategies import *
 from product.models import ProductItemOrService
 from medical.models import Item, Service
 
-from claim.utils import process_items_relations, process_services_relations
+from claim.utils import validate_status_transition, check_initial_status_permission, get_status_permission_mapping, check_claim_location_access
 from claim.services import validate_claim_data as service_validate_claim_data, \
         update_or_create_claim as service_update_or_create_claim, check_unique_claim_code, ClaimSubmitService,\
             processing_claim as service_processing_claim,\
@@ -430,8 +430,20 @@ class ReturnClaimMutation(OpenIMISMutation):
                     _("mutation.authentication_required"))
             if not user.has_perms(ClaimConfig.gql_mutation_return_claims_perms):
                 raise PermissionDenied(_("unauthorized"))
+            claim_uuid = data.get('uuid')
+            return_type = data.get('return_type')
+            claim = check_claim_location_access(claim_uuid, user)
+            
+            if not claim:
+                raise PermissionDenied(
+                    _("claim.mutation.claim_not_found_or_no_location_access")
+                )
+            target_status = return_type
+            validate_status_transition(claim.status, target_status, user)
+            check_initial_status_permission(claim.status, user)
+            
             data['audit_user_id'] = user.id_for_audit
-            return_claim(data, user)
+            return_claim(data, user, claim)
             return None
         except Exception as exc:
             return [{
@@ -455,8 +467,19 @@ class ResubmitClaimMutation(OpenIMISMutation):
                     _("mutation.authentication_required"))
             if not user.has_perms(ClaimConfig.gql_mutation_resubmit_claims_to_head_perms):
                 raise PermissionDenied(_("unauthorized"))
+            claim_uuid = data.get('uuid')
+            return_type = data.get('return_type')
+            claim = check_claim_location_access(claim_uuid, user)
+            if not claim:
+                raise PermissionDenied(
+                    _("claim.mutation.claim_not_found_or_no_location_access")
+                )
+            target_status = return_type
+            validate_status_transition(claim.status, target_status, user)
+            check_initial_status_permission(claim.status, user)
+
             data['audit_user_id'] = user.id_for_audit
-            return_claim(data, user)
+            return_claim(data, user, claim)
             return None
         except Exception as exc:
             return [{
@@ -521,6 +544,7 @@ class UpdateAttachmentMutation(OpenIMISMutation):
                 .first()
             if not attachment:
                 raise PermissionDenied(_("unauthorized"))
+            claim_id = attachment.claim.id
             general_type = data['general_type']
             data['module'] = 'claim'
             from core import datetime
@@ -681,36 +705,49 @@ class SubmitClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
         uuids = data.get("uuids", [])
         client_mutation_id = data.get("client_mutation_id", None)
         service = ClaimSubmitService(user)
-        c_errors = []
-
-        claims = Claim.objects.filter(uuid__in=uuids,
-            validity_to__isnull=True) \
-            .prefetch_related(Prefetch('items', queryset=ClaimItem.objects.filter(
-                *filter_validity(),
-                Q(Q(rejection_reason=0) | Q(rejection_reason__isnull=True))))) \
-            .prefetch_related(Prefetch('services', queryset=ClaimService.objects.filter(
-                *filter_validity(),
-                Q(Q(rejection_reason=0) | Q(rejection_reason__isnull=True)))))
-        remaining_uuid = list(map(str.upper, uuids))
-
-        for claim in claims:
-            remaining_uuid.remove(claim.uuid.upper())
-            subm_claim, error = service.submit_claim(claim, user)
-            if error:
-                c_errors += error
-            if c_errors:
+        successful_uuids = []
+        
+        for claim_uuid in uuids:
+            try:
+                claim = check_claim_location_access(claim_uuid, user)
+                
+                if not claim:
+                    errors.append({
+                        'uuid': claim_uuid,
+                        'message': _("claim.mutation.claim_not_found_or_no_location_access")
+                    })
+                    continue
+                check_initial_status_permission(claim.status, user)
+                subm_claim, claim_errors = service.submit_claim(claim, user)
+                
+                if claim_errors:
+                    errors.append({
+                        'title': claim.code,
+                        'uuid': claim_uuid,
+                        'list': claim_errors
+                    })
+                else:
+                    successful_uuids.append(claim_uuid)
+                    
+            except (ValidationError, PermissionDenied) as e:
                 errors.append({
-                    'title': claim.code,
-                    'list': c_errors
+                    'uuid': claim_uuid,
+                    'message': str(e)
                 })
-        if len(remaining_uuid):
-            c_errors.append({'code': REJECTION_REASON_INVALID_CLAIM,
-                             'message': _("claim.validation.claim_uuid_not_found") + ','.join(remaining_uuid)})
-        if len(errors) == 1:
+                continue
+            except Exception as e:
+                errors.append({
+                    'uuid': claim_uuid,
+                    'message': _("claim.mutation.unexpected_error"),
+                    'detail': str(e)
+                })
+                continue
+        cls.add_submission_stats_to_mutation_log(client_mutation_id, successful_uuids)
+        if len(errors) == 1 and 'list' in errors[0]:
             errors = errors[0]['list']
-        cls.add_submission_stats_to_mutation_log(client_mutation_id, uuids)
-        logger.debug(
-            "SubmitClaimsMutation: claim done, errors: %s", len(errors))
+        
+        logger.debug("SubmitClaimsMutation: %s claims submitted, errors: %s", 
+                    len(successful_uuids), len(errors))
         return errors
 
 
@@ -1039,28 +1076,63 @@ class ChangeClaimsStatusMutation(OpenIMISMutation):
                 raise ValidationError(_("mutation.authentication_required"))
 
             status = data.get("status")
-            perms = {
-                Claim.STATUS_SUBMITTED_TO_HEAD: ClaimConfig.gql_mutation_submit_claims_to_head_perms,
-                Claim.STATUS_RESUBMITTED_TO_HEAD: ClaimConfig.gql_mutation_resubmit_claims_to_head_perms,
-                Claim.STATUS_RESUBMITTED_TO_BRANCH: ClaimConfig.gql_mutation_resubmit_claims_to_branch_perms,
-                Claim.STATUS_FLAGGED: ClaimConfig.gql_mutation_flag_claims_perms,
-                Claim.STATUS_VALUATED: ClaimConfig.gql_mutation_approve_claims_perms,
-                Claim.STATUS_REJECTED: ClaimConfig.gql_mutation_reject_claims_perms,
-            }
+            uuids = data.get("uuids", [])
+            errors = []
+            status_perms_map = get_status_permission_mapping()
+            
+            # Check permission for target status
+            if status in status_perms_map:
+                required_perms = status_perms_map[status]
+                if required_perms and not user.has_perms(required_perms):
+                    return [{
+                        "message": _("claim.mutation.no_permission_for_target_status") % {"status": status}
+                    }]
+                if status == Claim.STATUS_REJECTED and not data.get("rejection_code"):
+                    return [{
+                        "message": _("claim.mutation.rejection_code_required")
+                    }]
 
-            if status in perms and not user.has_perms(perms[status]):
-                raise PermissionDenied(_("unauthorized"))
-            if status == Claim.STATUS_REJECTED:
-                if not data.get("rejection_code"):
-                    raise ValidationError(_("claim.mutation.rejection_code_required"))
-            return update_claims_status(
-                uuids=data.get('uuids'),
-                field='status',
-                status=status,
-                user=user,
-                rejection_code=data.get("rejection_code"),
-                rejection_note=data.get("rejection_note")
-            )
+            # Process each claim with individual checks
+            successful_uuids = []
+            for claim_uuid in uuids:
+                try:
+                    claim = check_claim_location_access(claim_uuid, user)
+                    if not claim:
+                        errors.append({
+                            'uuid': claim_uuid,
+                            'message': _("claim.mutation.claim_not_found_or_no_location_access")
+                        })
+                        continue
+
+                    validate_status_transition(claim.status, status, user)
+                    check_initial_status_permission(claim.status, user)
+                    successful_uuids.append(claim_uuid)
+                except (ValidationError, PermissionDenied) as e:
+                    errors.append({
+                        'uuid': claim_uuid,
+                        'message': str(e)
+                    })
+                    continue
+                except Exception as e:
+                    errors.append({
+                        'uuid': claim_uuid,
+                        'message': _("claim.mutation.unexpected_error"),
+                        'detail': str(e)
+                    })
+                    continue
+            
+            if successful_uuids:
+                mutation_errors = update_claims_status(
+                    uuids=successful_uuids,
+                    field='status',
+                    status=status,
+                    user=user,
+                    rejection_code=data.get("rejection_code"),
+                    rejection_note=data.get("rejection_note")
+                )
+                if mutation_errors:
+                    errors.extend(mutation_errors)
+            return errors
 
         except Exception as exc:
             return [{
@@ -1097,44 +1169,56 @@ class ProcessClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
         errors = []
         uuids = data.get("uuids", None)
         client_mutation_id = data.get("client_mutation_id", None)
-        claims = Claim.objects \
-            .filter(uuid__in=uuids) \
-            .prefetch_related(Prefetch('items', queryset=ClaimItem.objects.filter(*filter_validity())))\
-            .prefetch_related(Prefetch('services', queryset=ClaimService.objects.filter(*filter_validity())))
-        remaining_uuid = list(map(str.upper, uuids))
-        for claim in claims:
-            remaining_uuid.remove(claim.uuid.upper())
-            logger.debug(
-              "ProcessClaimsMutation: processing %s", 
-              claim.uuid
-            )
-            c_errors = []
-            claim.save_history()
-            claim.audit_user_id_process = user.id_for_audit
-            logger.debug("ProcessClaimsMutation: validating claim %s", claim.uuid)
-            c_errors += processing_claim(claim, user, True)
-            logger.debug("ProcessClaimsMutation: claim %s set processed or valuated", claim.uuid)
-
-            if c_errors:
+        successful_uuids = []
+        
+        for claim_uuid in uuids:
+            try:
+                claim = check_claim_location_access(claim_uuid, user)
+                if not claim:
+                    errors.append({
+                        'uuid': claim_uuid,
+                        'message': _("claim.mutation.claim_not_found_or_no_location_access")
+                    })
+                    continue
+                
+                check_initial_status_permission(claim.status, user)
+                c_errors = []
+                claim.save_history()
+                claim.audit_user_id_process = user.id_for_audit
+                c_errors += processing_claim(claim, user, True)
+                
+                if c_errors:
+                    errors.append({
+                        'title': claim.code,
+                        'uuid': claim_uuid,
+                        'list': c_errors
+                    })
+                else:
+                    claim.save()
+                    successful_uuids.append(claim_uuid)
+                    
+            except (ValidationError, PermissionDenied) as e:
                 errors.append({
-                    'title': claim.code,
-                    'list': c_errors
+                    'uuid': claim_uuid,
+                    'message': str(e)
                 })
-            claim.save()
-        if len(remaining_uuid):
-            errors += {
-                'title': _('error'),
-                'list': [{'message': _(
-                    "claim.validation.id_does_not_exist") % {'id': ','.join(remaining_uuid)}}]
-            }
-        if len(errors) == 1:
+                continue
+            except Exception as e:
+                errors.append({
+                    'uuid': claim_uuid,
+                    'message': _("claim.mutation.unexpected_error"),
+                    'detail': str(e)
+                })
+                continue
+        
+        cls.add_submission_stats_to_mutation_log(client_mutation_id, successful_uuids)
+        
+        if len(errors) == 1 and 'list' in errors[0]:
             errors = errors[0]['list']
-        cls.add_submission_stats_to_mutation_log(client_mutation_id, uuids)
-        logger.debug("ProcessClaimsMutation: claims %s done, errors: %s",
-                     data["uuids"], len(errors))
+        
         return errors
-
-
+    
+    
 class DeleteClaimsMutation(OpenIMISMutation):
     """
     Mark one or several claims as Deleted (validity_to)

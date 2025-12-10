@@ -30,6 +30,7 @@ It is dedicated to be deployed as a module of [openimis-be_py](https://github.co
 * STATUS_RESUBMITTED_TO_HEAD = 20
 * STATUS_RESUBMITTED_TO_BRANCH = 21
 * STATUS_FLAGGED = 22
+* STATUS_REIMBURSED = 23
 
 ## Reports (template can be overloaded via report.ReportDefinition)
 * claim_claims (Claim printing)

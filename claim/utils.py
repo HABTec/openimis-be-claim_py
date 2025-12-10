@@ -319,4 +319,91 @@ def get_user_permitted_statuses(user):
             permitted_statuses.append(status)
     
     return permitted_statuses
+ 
+def validate_status_transition(current_status, new_status, user):
+    """
+    Validate if a status transition is allowed.
+    """
+    # allowed status transitions
+    allowed_transitions = {
+        Claim.STATUS_REJECTED: [],
+        Claim.STATUS_ENTERED: [
+            Claim.STATUS_SUBMITTED_TO_HEAD,
+        ],
+        Claim.STATUS_SUBMITTED_TO_HEAD: [
+            Claim.STATUS_CHECKED,
+            Claim.STATUS_RESUBMITTED_TO_BRANCH,
+            Claim.STATUS_RETURNED_FROM_FACILITY,
+        ],
+        Claim.STATUS_CHECKED: [
+            Claim.STATUS_VALUATED,
+            Claim.STATUS_PROCESSED,
+            Claim.STATUS_REJECTED,
+            Claim.STATUS_RETURNED_FROM_BRANCH
+        ],
+        Claim.STATUS_RETURNED_FROM_BRANCH: [
+            Claim.STATUS_RESUBMITTED_TO_HEAD,
+        ],
+        Claim.STATUS_RESUBMITTED_TO_HEAD: [
+            Claim.STATUS_RESUBMITTED_TO_BRANCH,
+            Claim.STATUS_RETURNED_FROM_FACILITY
+        ],
+        Claim.STATUS_RESUBMITTED_TO_BRANCH: [
+            Claim.STATUS_VALUATED,
+            Claim.STATUS_PROCESSED,
+            Claim.STATUS_REJECTED,
+            Claim.STATUS_FLAGGED,
+            Claim.STATUS_RETURNED_FROM_BRANCH
+        ],
+        Claim.STATUS_RETURNED_FROM_FACILITY: [
+            Claim.STATUS_RESUBMITTED_TO_HEAD,
+        ],
+        Claim.STATUS_FLAGGED: [
+            Claim.STATUS_VALUATED,
+            Claim.STATUS_PROCESSED,
+            Claim.STATUS_REJECTED
+        ],
+        Claim.STATUS_VALUATED: [
+            Claim.STATUS_REIMBURSED
+        ],
+        Claim.STATUS_PROCESSED: [],
+        Claim.STATUS_REIMBURSED: []
+    }
     
+    if current_status in allowed_transitions:
+        if new_status not in allowed_transitions[current_status]:
+            raise ValidationError(
+                _("claim.mutation.invalid_status_transition_from_to") % {
+                    'from': current_status,
+                    'to': new_status
+                }
+            )
+    else:
+        raise ValidationError(
+            _("claim.mutation.invalid_current_status") % {'status': current_status}
+        )
+    
+
+def check_initial_status_permission(current_status, user):
+    """
+    Check if user has permission to view/modify claims with the current status.
+    """
+    status_permission_map = get_status_permission_mapping()
+    
+    if current_status in status_permission_map:
+        required_perms = status_permission_map[current_status]
+        if required_perms and not user.has_perms(required_perms):
+            raise PermissionDenied(
+                _("claim.mutation.no_permission_for_current_status") % {
+                    'status': current_status
+                }
+            )
+
+def check_claim_location_access(claim_uuid, user):
+    """
+    Check if user has location-based access to a specific claim.
+    Returns the claim if accessible, None otherwise.
+    """
+    queryset = Claim.objects.filter(uuid=claim_uuid)
+    accessible_queryset = Claim.get_queryset(queryset, user)
+    return accessible_queryset.first()
