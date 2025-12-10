@@ -144,3 +144,46 @@ CHECKED and reviewed is not a different status that CHECKED
 
 ### process steps
 SAVED --Submit--> CHECKED --process--> PROCESSED --batch run--> VALUATED --payment--> remunerated*
+
+
+# Modifying Claim Return Reasons via Admin Panel
+
+## Quick Setup Guide
+
+### 1. Access Admin Panel
+- Log in as admin and go to `/admin/`
+- Click **"Add"** next to **"Module configurations"**
+
+### 2. Enter Configuration
+- **Module**: `"claim"`
+- **Layer**: Select `"backend"`
+- **Version**: Current version (e.g., `"1.0"`)
+- **Config**: Paste JSON with return reasons
+
+### 3. JSON Format
+```json
+{
+  "return_reasons": [
+    {"code": 1, "name": "Reason 1"},
+    {"code": 2, "name": "Reason 2"},
+    {"code": 3, "name": "Reason 3"}
+  ]
+}
+```
+
+**Save and restart the application.** You can check the new reasons by querying the `returnedClaimsReason` GraphQL query.
+
+### 4. Verify Changes
+Use this GraphQL query to confirm your new reasons:
+```graphql
+query {
+  returnedClaimsReason {
+    code
+    name
+  }
+}
+```
+
+### 5. Important Notes
+- **Codes must be unique integers**
+- **Restart application after saving changes**

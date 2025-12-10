@@ -199,3 +199,7 @@ class ClaimServiceItemGQLType(DjangoObjectType):
 class ClaimSummaryGQLType(graphene.ObjectType):
     count = graphene.Int()
     total_approved = graphene.Float()
+
+class ClaimReturnedReasonGQLType(graphene.ObjectType):
+    code = graphene.Int()
+    name = graphene.String()

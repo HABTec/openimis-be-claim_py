@@ -87,6 +87,10 @@ class Query(graphene.ObjectType):
         description="Return approved claims count and total approved amount for a given health facility"
     )
 
+    returned_claims_reason = graphene.List(
+        ClaimReturnedReasonGQLType,
+        description="Return predefined reasons for returned claims"
+    )
 
     def resolve_insuree_name_by_chfid(self, info, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_mutation_create_claims_perms)\
@@ -275,6 +279,9 @@ class Query(graphene.ObjectType):
             count=summary["count"] or 0,
             total_approved=summary["total_approved"] or 0
         )
+    
+    def resolve_returned_claims_reason(self, info, **kwargs):
+        return ClaimConfig.return_reasons
 
 class Mutation(graphene.ObjectType):
     create_claim = CreateClaimMutation.Field()
