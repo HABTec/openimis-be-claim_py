@@ -140,7 +140,6 @@ class Query(graphene.ObjectType):
             filters.append(Q(status=requested_status))
         else:
             permitted_statuses = get_user_permitted_statuses(info.context.user)
-            print("\033[92mPermitted status \033[0m", permitted_statuses, info.context.user)
             if not permitted_statuses:
                 return Claim.objects.none()
             filters.append(Q(status__in=permitted_statuses))

@@ -324,7 +324,6 @@ def validate_status_transition(current_status, new_status, user):
     """
     Validate if a status transition is allowed.
     """
-    print("\033[92mcurrent status and new status \033[0m", current_status, new_status)
     # allowed status transitions
     allowed_transitions = {
         Claim.STATUS_REJECTED: [],
@@ -368,7 +367,8 @@ def validate_status_transition(current_status, new_status, user):
         Claim.STATUS_VALUATED: [
             Claim.STATUS_REIMBURSED
         ],
-        Claim.STATUS_PROCESSED: []
+        Claim.STATUS_PROCESSED: [],
+        Claim.STATUS_REIMBURSED: []
     }
     
     if current_status in allowed_transitions:

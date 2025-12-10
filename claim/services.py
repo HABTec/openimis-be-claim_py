@@ -225,8 +225,6 @@ class ClaimSubmitService(object):
         """
         self._validate_submit_permissions()
         self._validate_user_hf(claim.health_facility.code)
-        validate_status_transition(claim.status, Claim.STATUS_CHECKED, self.user)
-        check_initial_status_permission(claim.status, self.user)
         claim.save_history()
         validation_errors = processing_claim(claim, self.user, False, rule_engine_validation)
         if validation_errors:

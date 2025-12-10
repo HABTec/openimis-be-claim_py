@@ -705,36 +705,49 @@ class SubmitClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
         uuids = data.get("uuids", [])
         client_mutation_id = data.get("client_mutation_id", None)
         service = ClaimSubmitService(user)
-        c_errors = []
-
-        claims = Claim.objects.filter(uuid__in=uuids,
-            validity_to__isnull=True) \
-            .prefetch_related(Prefetch('items', queryset=ClaimItem.objects.filter(
-                *filter_validity(),
-                Q(Q(rejection_reason=0) | Q(rejection_reason__isnull=True))))) \
-            .prefetch_related(Prefetch('services', queryset=ClaimService.objects.filter(
-                *filter_validity(),
-                Q(Q(rejection_reason=0) | Q(rejection_reason__isnull=True)))))
-        remaining_uuid = list(map(str.upper, uuids))
-
-        for claim in claims:
-            remaining_uuid.remove(claim.uuid.upper())
-            subm_claim, error = service.submit_claim(claim, user)
-            if error:
-                c_errors += error
-            if c_errors:
+        successful_uuids = []
+        
+        for claim_uuid in uuids:
+            try:
+                claim = check_claim_location_access(claim_uuid, user)
+                
+                if not claim:
+                    errors.append({
+                        'uuid': claim_uuid,
+                        'message': _("claim.mutation.claim_not_found_or_no_location_access")
+                    })
+                    continue
+                check_initial_status_permission(claim.status, user)
+                subm_claim, claim_errors = service.submit_claim(claim, user)
+                
+                if claim_errors:
+                    errors.append({
+                        'title': claim.code,
+                        'uuid': claim_uuid,
+                        'list': claim_errors
+                    })
+                else:
+                    successful_uuids.append(claim_uuid)
+                    
+            except (ValidationError, PermissionDenied) as e:
                 errors.append({
-                    'title': claim.code,
-                    'list': c_errors
+                    'uuid': claim_uuid,
+                    'message': str(e)
                 })
-        if len(remaining_uuid):
-            c_errors.append({'code': REJECTION_REASON_INVALID_CLAIM,
-                             'message': _("claim.validation.claim_uuid_not_found") + ','.join(remaining_uuid)})
-        if len(errors) == 1:
+                continue
+            except Exception as e:
+                errors.append({
+                    'uuid': claim_uuid,
+                    'message': _("claim.mutation.unexpected_error"),
+                    'detail': str(e)
+                })
+                continue
+        cls.add_submission_stats_to_mutation_log(client_mutation_id, successful_uuids)
+        if len(errors) == 1 and 'list' in errors[0]:
             errors = errors[0]['list']
-        cls.add_submission_stats_to_mutation_log(client_mutation_id, uuids)
-        logger.debug(
-            "SubmitClaimsMutation: claim done, errors: %s", len(errors))
+        
+        logger.debug("SubmitClaimsMutation: %s claims submitted, errors: %s", 
+                    len(successful_uuids), len(errors))
         return errors
 
 
