@@ -443,7 +443,7 @@ class ReturnClaimMutation(OpenIMISMutation):
             check_initial_status_permission(claim.status, user)
             
             data['audit_user_id'] = user.id_for_audit
-            return_claim(data, user)
+            return_claim(data, user, claim)
             return None
         except Exception as exc:
             return [{
@@ -479,7 +479,7 @@ class ResubmitClaimMutation(OpenIMISMutation):
             check_initial_status_permission(claim.status, user)
 
             data['audit_user_id'] = user.id_for_audit
-            return_claim(data, user)
+            return_claim(data, user, claim)
             return None
         except Exception as exc:
             return [{
@@ -1103,12 +1103,6 @@ class ChangeClaimsStatusMutation(OpenIMISMutation):
                             'message': _("claim.mutation.claim_not_found_or_no_location_access")
                         })
                         continue
-                    if not claim:
-                        errors.append({
-                            'uuid': claim_uuid,
-                            'message': _("claim.mutation.claim_not_found_or_no_location_access")
-                        })
-                        continue
 
                     validate_status_transition(claim.status, status, user)
                     check_initial_status_permission(claim.status, user)
@@ -1138,7 +1132,7 @@ class ChangeClaimsStatusMutation(OpenIMISMutation):
                 )
                 if mutation_errors:
                     errors.extend(mutation_errors)
-            return errors if errors else None
+            return errors
 
         except Exception as exc:
             return [{
@@ -1187,7 +1181,6 @@ class ProcessClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
                     })
                     continue
                 
-                validate_status_transition(claim.status, Claim.STATUS_PROCESSED, user)
                 check_initial_status_permission(claim.status, user)
                 c_errors = []
                 claim.save_history()

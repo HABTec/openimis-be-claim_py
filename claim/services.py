@@ -27,7 +27,7 @@ from claim.utils import (
 )
 from .validations import validate_claim, validate_assign_prod_to_claimitems_and_services, process_dedrem, \
     approved_amount, get_claim_category
-from .utils import validate_status_transition, check_initial_status_permission
+from .utils import validate_status_transition
 from django.db.models import Subquery, F, OuterRef, Sum, FloatField
 from django.db.models.functions import Coalesce
 from django.contrib.auth.models import AnonymousUser
@@ -539,15 +539,12 @@ def validate_number_of_additional_diagnoses(incoming_data):
 
     return additional_diagnoses_count <= ClaimConfig.additional_diagnosis_number_allowed
 
-def return_claim( data, user):
+def return_claim( data, user, claim):
     from core.utils import TimeUtils
-    # claim = Claim.objects.get(uuid=data['uuid'])
-    claim = Claim.objects \
-            .filter(uuid__in=data['uuid'],
-                    *filter_validity()).first()
     claim.save_history()
     claim.status = data['return_type']
     claim.save()
+
     ReturnedClaim.objects.create(
         claim=claim,
         predefined_reason=data['predefined_reason'],
@@ -641,18 +638,27 @@ def set_claim_processed_or_valuated(claim, errors, user):
     try:
         if errors:
             claim.status = Claim.STATUS_REJECTED
-        if claim.status == Claim.STATUS_CHECKED:
-            claim.approved = approved_amount(claim)
+        elif claim.status == Claim.STATUS_CHECKED:
             if with_relative_prices(claim):
-                claim.status = Claim.STATUS_PROCESSED
+                target_status = Claim.STATUS_PROCESSED
             else:
-                claim.status = Claim.STATUS_VALUATED
+                target_status = Claim.STATUS_VALUATED
+            validate_status_transition(claim.status, target_status, user)
+            claim.approved = approved_amount(claim)
+            claim.status = target_status
+            
+            if target_status == Claim.STATUS_VALUATED:
                 claim.valuated = claim.approved 
             claim.audit_user_id_process = user.id_for_audit
             from core.utils import TimeUtils
             claim.process_stamp = TimeUtils.now()
         claim.save()
         return []
+    except (ValidationError, PermissionDenied) as e:
+        return [{
+            'title': claim.code,
+            'list': [{'message': str(e)}]
+        }]
     except Exception as ex:
         error = {
             'title': claim.code,

@@ -342,7 +342,6 @@ def validate_status_transition(current_status, new_status, user):
             Claim.STATUS_RETURNED_FROM_BRANCH
         ],
         Claim.STATUS_RETURNED_FROM_BRANCH: [
-            Claim.STATUS_RETURNED_FROM_BRANCH,
             Claim.STATUS_RESUBMITTED_TO_HEAD,
         ],
         Claim.STATUS_RESUBMITTED_TO_HEAD: [
