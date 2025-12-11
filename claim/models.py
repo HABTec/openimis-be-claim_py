@@ -423,7 +423,7 @@ class ClaimItem(core_models.VersionedModel, ClaimDetail, core_models.ExtendableM
     exceed_ceiling_amount_category = models.DecimalField(
         db_column='ExceedCeilingAmountCategory', max_digits=18, decimal_places=2, blank=True, null=True)
     objects = ClaimDetailManager()
-    availability = models.BooleanField(db_column="availability")
+    availability = models.BooleanField(db_column="availability", default=True)
 
 
     class Meta:
@@ -529,7 +529,7 @@ class ClaimService(core_models.VersionedModel, ClaimDetail, core_models.Extendab
     exceed_ceiling_amount_category = models.DecimalField(
         db_column='ExceedCeilingAmountCategory', max_digits=18, decimal_places=2, blank=True, null=True)
     objects = ClaimDetailManager()
-    availability = models.BooleanField(db_column="availability")
+    availability = models.BooleanField(db_column="availability", default=True)
 
     class Meta:
         managed = True

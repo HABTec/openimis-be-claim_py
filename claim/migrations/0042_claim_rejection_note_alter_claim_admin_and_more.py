@@ -5,7 +5,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('claim', '0040_claimservice_availability_and_more'),
+        ('claim', '0041_alter_claim_admin_and_more'),
     ]
 
     operations = [
