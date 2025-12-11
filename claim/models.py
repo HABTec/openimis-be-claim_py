@@ -266,9 +266,10 @@ class ReturnedClaim(models.Model):
         managed = True
         db_table = 'tblReturnedClaim'
 
-    RETURNED_FROM_FACILITY = Claim.STATUS_RESUBMITTED_TO_HEAD 
-    RETURNED_FROM_BRANCH = Claim.STATUS_RETURNED_FROM_BRANCH
-    RESUBMITTED_TO_HEAD = Claim.STATUS_RESUBMITTED_TO_HEAD
+    RETURNED_FROM_FACILITY = Claim.STATUS_RETURNED_FROM_FACILITY
+    RETURNED_FROM_BRANCH = Claim.STATUS_RETURNED_FROM_BRANCH 
+    RESUBMITTED_TO_HEAD = Claim.STATUS_RESUBMITTED_TO_HEAD 
+    RESUBMITTED_TO_BRANCH = Claim.STATUS_RESUBMITTED_TO_BRANCH
 
 class FeedbackPrompt(core_models.VersionedModel):
     id = models.AutoField(db_column='FeedbackPromptID', primary_key=True)
