@@ -79,6 +79,7 @@ class ClaimItemInputType(InputObjectType):
     price_origin = graphene.String(required=False)
     exceed_ceiling_amount_category = graphene.Decimal(
         max_digits=18, decimal_places=2, required=False)
+    availability = graphene.Boolean(required=False)
 
 
 class ClaimSubServiceInputType(InputObjectType):
@@ -144,6 +145,7 @@ class ClaimServiceInputType(InputObjectType):
     service_item_set = graphene.List(ClaimSubItemInputType, required=False)
     service_service_set = graphene.List(
         ClaimSubServiceInputType, required=False)
+    availability = graphene.Boolean(required=False)
 
 
 class FeedbackInputType(InputObjectType):
