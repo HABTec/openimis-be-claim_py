@@ -37,7 +37,8 @@ class Query(graphene.ObjectType):
         json_ext=graphene.JSONString(),
         attachment_status=graphene.Int(required=False),
         care_type=graphene.String(required=False),
-        show_restored=graphene.Boolean(required=False)
+        show_restored=graphene.Boolean(required=False),
+        statuses=graphene.List(of_type=graphene.Int) 
         )
 
     claim = graphene.Field(
@@ -137,9 +138,19 @@ class Query(graphene.ObjectType):
             raise PermissionDenied(_("unauthorized"))
         query = Claim.objects
         filters = []
+        if kwargs.get("status") is not None and kwargs.get("statuses"):
+            raise ValidationError(
+                "Use either 'status' or 'statuses', not both."
+            )
+        requested_status = kwargs.get("status")
+        requested_statuses = kwargs.get("statuses")
 
-        requested_status = kwargs.get('status')
-        if requested_status is not None:
+        if requested_statuses:
+            for st in requested_statuses:
+                check_status_permission(info.context.user, st)
+            filters.append(Q(status__in=requested_statuses))
+
+        elif requested_status is not None:
             check_status_permission(info.context.user, requested_status)
             filters.append(Q(status=requested_status))
         else:
