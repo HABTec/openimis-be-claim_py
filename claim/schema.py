@@ -115,16 +115,21 @@ class Query(graphene.ObjectType):
         return False if errors else True
 
     def resolve_claim(self, info, id=None, uuid=None, **kwargs):
+        user = info.context.user
         if (
-            not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms)
+            not user.has_perms(ClaimConfig.gql_query_claims_perms)
             and settings.ROW_SECURITY
         ):
             raise PermissionDenied(_("unauthorized"))
 
         if id is not None:
-            return Claim.objects.get(id=id)
-        if uuid is not None:
-            return Claim.objects.get(uuid=uuid)
+            claim = Claim.objects.get(id=id)
+        elif uuid is not None:
+            claim = Claim.objects.get(uuid=uuid)
+        else:
+            return None
+        claim.refresh_from_db() 
+        return claim
 
     def resolve_claims(self, info, **kwargs):
         class AttachmentStatusEnum(Enum):
