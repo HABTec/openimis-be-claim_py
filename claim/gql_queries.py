@@ -13,7 +13,8 @@ from claim.models import (ClaimDedRem, Claim, Feedback, ClaimItem, ClaimService,
 from core.models.user import ClaimAdmin
 from django.utils.translation import gettext as _
 from django.core.exceptions import PermissionDenied
-from core.schema import ClaimAdminGQLType
+from core.schema import ClaimAdminGQLType, InteractiveUserGQLType
+import core.models as core_models
 
 class ClaimDedRemGQLType(DjangoObjectType):
     """
@@ -29,6 +30,17 @@ class ReturnedClaimGQLType(graphene.ObjectType):
     reason = graphene.String()
     predefined_reason = graphene.String()
     return_type = graphene.Int()
+    returned_by = graphene.Field(InteractiveUserGQLType)
+
+    def resolve_returned_by(self, info):
+        if not self.audit_user_id:
+            return None
+
+        return core_models.InteractiveUser.objects.filter(
+            id=self.audit_user_id
+        ).first()
+
+
 class ClaimGQLType(DjangoObjectType):
     """
     Main element for a Claim. It can contain items and/or services.
