@@ -35,10 +35,7 @@ class ReturnedClaimGQLType(graphene.ObjectType):
     def resolve_returned_by(self, info):
         if not self.audit_user_id:
             return None
-
-        return core_models.InteractiveUser.objects.filter(
-            id=self.audit_user_id
-        ).first()
+        return info.context.dataloaders["interactive_user_loader"].load(self.audit_user_id)
 
 
 class ClaimGQLType(DjangoObjectType):
