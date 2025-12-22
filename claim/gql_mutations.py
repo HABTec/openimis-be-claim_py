@@ -479,7 +479,8 @@ class ResubmitClaimMutation(OpenIMISMutation):
             target_status = return_type
             validate_status_transition(claim.status, target_status, user)
             check_initial_status_permission(claim.status, user)
-
+            
+            data['predefined_reason'] = 0
             data['audit_user_id'] = user.id_for_audit
             return_claim(data, user, claim)
             return None
