@@ -1,4 +1,5 @@
 import math
+from django.db import transaction
 from claim.models import Claim, ClaimItem, ClaimService, ClaimDetail, ClaimServiceItem, ClaimServiceService
 from medical.models import Item, Service
 from django.core.exceptions import ValidationError, PermissionDenied
@@ -407,3 +408,41 @@ def check_claim_location_access(claim_uuid, user):
     queryset = Claim.objects.filter(uuid=claim_uuid)
     accessible_queryset = Claim.get_queryset(queryset, user)
     return accessible_queryset.first()
+
+def autogenerate_ethiopian_claim_code(config):
+    code_length = config.get('code_length', 5)
+    ethiopian_year = __get_current_ethiopian_year()
+    prefix = f"{ethiopian_year}-"
+
+    with transaction.atomic():
+        last_claim = Claim.objects.select_for_update().filter(
+            validity_to__isnull=True, 
+            code__startswith=prefix
+        ).order_by('-code').first()
+        
+        if last_claim:
+            parts = last_claim.code.split('-')
+            try:
+                current_sequence = int(parts[-1])
+            except (ValueError, IndexError):
+                current_sequence = 0
+        else:
+            current_sequence = 0
+
+        new_sequence = current_sequence + 1
+        padded_sequence = str(new_sequence).zfill(code_length)
+        return f"{prefix}{padded_sequence}"
+
+def __get_current_ethiopian_year():
+    """
+    Get current Ethiopian year
+    """
+    from datetime import datetime
+    
+    today = datetime.now()
+    current_gregorian_year = today.year
+    ethiopian_year = current_gregorian_year - 8
+    if today.month > 9 or (today.month == 9 and today.day >= 11):
+        ethiopian_year += 1
+    
+    return ethiopian_year
