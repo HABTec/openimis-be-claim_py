@@ -326,7 +326,6 @@ def validate_status_transition(current_status, new_status, user):
     """
     # allowed status transitions
     allowed_transitions = {
-        Claim.STATUS_REJECTED: [],
         Claim.STATUS_ENTERED: [
             Claim.STATUS_SUBMITTED_TO_HEAD,
         ],
@@ -338,13 +337,12 @@ def validate_status_transition(current_status, new_status, user):
         Claim.STATUS_CHECKED: [
             Claim.STATUS_VALUATED,
             Claim.STATUS_PROCESSED,
-            Claim.STATUS_REJECTED,
-            Claim.STATUS_RETURNED_FROM_BRANCH
         ],
         Claim.STATUS_RETURNED_FROM_BRANCH: [
             Claim.STATUS_RESUBMITTED_TO_HEAD,
         ],
         Claim.STATUS_RESUBMITTED_TO_HEAD: [
+            Claim.STATUS_CHECKED,
             Claim.STATUS_RESUBMITTED_TO_BRANCH,
             Claim.STATUS_RETURNED_FROM_FACILITY
         ],
@@ -361,13 +359,15 @@ def validate_status_transition(current_status, new_status, user):
         Claim.STATUS_FLAGGED: [
             Claim.STATUS_VALUATED,
             Claim.STATUS_PROCESSED,
-            Claim.STATUS_REJECTED
+            Claim.STATUS_REJECTED,
+            Claim.STATUS_RETURNED_FROM_BRANCH
         ],
         Claim.STATUS_VALUATED: [
             Claim.STATUS_REIMBURSED
         ],
         Claim.STATUS_PROCESSED: [],
-        Claim.STATUS_REIMBURSED: []
+        Claim.STATUS_REIMBURSED: [],
+        Claim.STATUS_REJECTED: [],
     }
     
     if current_status in allowed_transitions:
