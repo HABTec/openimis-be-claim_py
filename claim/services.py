@@ -429,15 +429,16 @@ def _get_autogenerating_func() -> Callable[[Dict], Callable]:
     module = importlib.import_module(module_name)
     return getattr(module, function_name)
 
-
-def claim_create(data, user, autogenerate_code = False):
+def claim_create(data, user):
     restore = data.pop('restore', None)
-    autogenerate_code = data.pop('autogenerate', None)
     if restore:
         data["restore"] = Claim.objects.filter(uuid=restore).first()
-    
-    if autogenerate_code:
-        data['code'] = __autogenerate_claim_code()
+
+    generated_code = __autogenerate_claim_code()
+    if Claim.objects.filter(code=generated_code, validity_to__isnull=True).exists():
+        raise ValidationError(_("Generated claim code already exists. Please try again."))
+
+    data['code'] = generated_code
     data['audit_user_id'] = user.id_for_audit
     claim = Claim()
     set_reduced_attr(claim, data, ['items', 'services'])
@@ -447,6 +448,7 @@ def claim_create(data, user, autogenerate_code = False):
 
 
 def claim_update(claim, data, user):
+    data.pop("code", None)  # code is not updatable
     claim.save_history()
     # reset the non required fields
     # (each update is 'complete', necessary to be able to set 'null')
@@ -492,7 +494,6 @@ def update_or_create_claim(data, user):
 
 def validate_claim_data(data, user):
     services = data.get('services') if 'services' in data else []
-    incoming_code = data.get('code')
     claim_uuid = data.get("uuid", None)
     restore = data.get('restore', None)
     current_claim = Claim.objects.filter(uuid=claim_uuid).first()
@@ -523,13 +524,6 @@ def validate_claim_data(data, user):
         for service in services:
             if service["qty_provided"] > 1 and not service.get("explanation"):
                 raise ValidationError(_("mutation.service_explanation_required"))
-
-    if len(incoming_code) > ClaimConfig.max_claim_length:
-        raise ValidationError(_("mutation.code_name_too_long"))
-
-    if not restore and current_code != incoming_code and check_unique_claim_code(incoming_code):
-        raise ValidationError(_("mutation.code_name_duplicated"))
-
 
 def validate_number_of_additional_diagnoses(incoming_data):
     additional_diagnoses_count = 0
