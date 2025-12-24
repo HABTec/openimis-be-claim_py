@@ -16,7 +16,11 @@ DEFAULT_CFG = {
     "gql_query_claims_returned_branch_perms": ["111066"],    
     "gql_query_claims_submitted_head_perms": ["111067"],     
     "gql_query_claims_resubmitted_head_perms": ["111068"],   
-    "gql_query_claims_resubmitted_branch_perms": ["111069"], 
+    "gql_query_claims_resubmitted_branch_perms": ["111069"],
+    "gql_query_claim_review_page_perms": ["111080"],
+    "gql_query_claim_approval_page_perms": ["111081"],
+    "gql_query_insuree_checkin_page_perms": ["111082"], 
+    "gql_query_health_facility_page_perms": ["111083"],
     "gql_query_claims_flagged_perms": ["111070"],
     "gql_mutation_create_claims_perms": ["111002"],
     "gql_mutation_update_claims_perms": ["111010"],
@@ -92,6 +96,10 @@ class ClaimConfig(AppConfig):
     gql_query_claims_resubmitted_head_perms = []
     gql_query_claims_resubmitted_branch_perms = []
     gql_query_claims_flagged_perms = []
+    gql_query_claim_review_page_perms = []
+    gql_query_claim_approval_page_perms = []
+    gql_query_insuree_checkin_page_perms = []
+    gql_query_health_facility_page_perms = []
     gql_mutation_create_claims_perms = []
     gql_mutation_update_claims_perms = []
     gql_mutation_return_claims_perms = []

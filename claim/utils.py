@@ -338,6 +338,7 @@ def validate_status_transition(current_status, new_status, user):
         Claim.STATUS_CHECKED: [
             Claim.STATUS_VALUATED,
             Claim.STATUS_PROCESSED,
+            Claim.STATUS_FLAGGED
         ],
         Claim.STATUS_RETURNED_FROM_BRANCH: [
             Claim.STATUS_RESUBMITTED_TO_HEAD,
