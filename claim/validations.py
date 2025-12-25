@@ -2,7 +2,7 @@ import itertools
 import logging
 from collections import namedtuple
 from decimal import Decimal
-from claim.models import ClaimItem, Claim, ClaimService, ClaimDedRem, ClaimDetail, ClaimServiceService, ClaimServiceItem
+from claim.models import ClaimItem, Claim, ClaimService, ClaimDedRem, ClaimDetail, ClaimServiceService, ClaimServiceItem, ClaimLaboratoryService
 
 from core import utils
 from datetime import datetime
@@ -13,10 +13,10 @@ from django.db.models import Sum, Q, ExpressionWrapper, DecimalField
 from django.db.models.functions import Coalesce
 from django.utils.translation import gettext as _
 from insuree.models import InsureePolicy
-from medical.models import Service, ServiceService, ServiceItem
-from medical_pricelist.models import ItemsPricelistDetail, ServicesPricelistDetail
+from medical.models import Service, ServiceService, ServiceItem, LaboratoryService
+from medical_pricelist.models import ItemsPricelistDetail, ServicesPricelistDetail, LaboratoryServicesPricelistDetail
 from policy.models import Policy
-from product.models import Product, ProductItem, ProductService, ProductItemOrService
+from product.models import Product, ProductItem, ProductService, ProductItemOrService, ProductLaboratoryService
 
 from .apps import ClaimConfig
 from .utils import get_queryset_valid_at_date, get_valid_policies_qs, get_claim_target_date, approved_amount
@@ -183,6 +183,40 @@ def validate_claimservices(claim, save=True):
                 claimservice.save()
     return errors
 
+def validate_claimlabservices(claim, save=True):
+    """Validate laboratory services in a claim"""
+    errors = []
+    target_date = get_claim_target_date(claim)
+    
+    for claimlabservice in claim.lab_services.all():
+        if not claimlabservice.rejection_reason:
+            errors += validate_claimlabservice_validity(claim, claimlabservice)
+            if not claimlabservice.rejection_reason:
+                errors += validate_claimlabservice_in_price_list(claim, claimlabservice)
+            if not claimlabservice.rejection_reason:
+                errors += validate_claimdetail_care_type(claim, claimlabservice)
+            if not claimlabservice.rejection_reason:
+                errors += validate_claimdetail_limitation_fail(claim, claimlabservice)
+            if not claimlabservice.rejection_reason:
+                errors += validate_claimlabservice_frequency(claim, claimlabservice)
+            if not claimlabservice.rejection_reason:
+                errors += validate_lab_service_product_family(
+                    claimlabservice=claimlabservice,
+                    target_date=target_date,
+                    lab_service=claimlabservice.lab_service,
+                    insuree_id=claim.insuree_id,
+                    adult=claim.insuree.is_adult(target_date),
+                    claim=claim,
+                )
+            if claimlabservice.rejection_reason:
+                claimlabservice.status = ClaimLaboratoryService.STATUS_REJECTED
+            else:
+                claimlabservice.rejection_reason = 0
+                claimlabservice.status = ClaimLaboratoryService.STATUS_PASSED
+            if save:
+                claimlabservice.save()
+    return errors
+
 
 def validate_claimitem_validity(claim, claimitem):
     # In the stored procedure, this check used a complex query to get the latest item but the latest item seems to
@@ -215,6 +249,16 @@ def validate_claimservice_validity(claim, claimservice):
                     'detail': claim.uuid}]
     return errors
 
+def validate_claimlabservice_validity(claim, claimlabservice):
+    errors = []
+    if claimlabservice.validity_to is None and claimlabservice.lab_service.validity_to is not None:
+        claimlabservice.rejection_reason = REJECTION_REASON_INVALID_ITEM_OR_SERVICE
+        errors += [{'code': REJECTION_REASON_INVALID_ITEM_OR_SERVICE,
+                    'message': _("claim.validation.claimlabservice_validity") % {
+                        'code': claim.code
+                    },
+                    'detail': claim.uuid}]
+    return errors
 
 
 
@@ -250,6 +294,37 @@ def validate_claimservice_in_price_list(claim, claimservice):
         claimservice.rejection_reason = REJECTION_REASON_NOT_IN_PRICE_LIST
         errors += [{'code': REJECTION_REASON_NOT_IN_PRICE_LIST,
                     'message': _("claim.validation.claimservice_in_price_list_validity") % {
+                        'code': claim.code
+                    },
+                    'detail': claim.uuid}]
+    return errors
+
+def validate_claimlabservice_in_price_list(claim, claimlabservice):
+    errors = []
+    target_date = get_claim_target_date(claim)
+    
+    # Check if lab services pricelist exists on health facility
+    if not hasattr(claim.health_facility, 'lab_services_pricelist') or not claim.health_facility.lab_services_pricelist:
+        # If no specific lab services pricelist, check if lab services are in the services pricelist
+        pricelist_detail_qs = ServicesPricelistDetail.objects \
+            .filter(service_id=claimlabservice.lab_service_id,  # Assuming lab services are linked as services
+                     *filter_validity(validity=target_date),
+                    services_pricelist=claim.health_facility.services_pricelist,
+                    services_pricelist__validity_to__isnull=True
+                    )
+    else:
+        # If you have a separate LaboratoryServicesPricelistDetail model
+        pricelist_detail_qs = LaboratoryServicesPricelistDetail.objects \
+            .filter(lab_service_id=claimlabservice.lab_service_id,
+                     *filter_validity(validity=target_date),
+                    lab_services_pricelist=claim.health_facility.lab_services_pricelist,
+                    lab_services_pricelist__validity_to__isnull=True
+                    )
+    
+    if not pricelist_detail_qs:
+        claimlabservice.rejection_reason = REJECTION_REASON_NOT_IN_PRICE_LIST
+        errors += [{'code': REJECTION_REASON_NOT_IN_PRICE_LIST,
+                    'message': _("claim.validation.claimlabservice_in_price_list_validity") % {
                         'code': claim.code
                     },
                     'detail': claim.uuid}]
@@ -336,6 +411,18 @@ def validate_claimservice_frequency(claim, claimservice):
         claimservice.rejection_reason = REJECTION_REASON_FREQUENCY_FAILURE
         errors += [{'code': REJECTION_REASON_FREQUENCY_FAILURE,
                     'message': _("claim.validation.claimservice_frequency_validity") % {
+                        'code': claim.code
+                    },
+                    'detail': claim.uuid}]
+    return errors
+
+def validate_claimlabservice_frequency(claim, claimlabservice):
+    errors = []
+    if claimlabservice.lab_service.frequency and \
+            frequency_check(ClaimLaboratoryService.objects.filter(lab_service=claimlabservice.lab_service), claim, claimlabservice.lab_service):
+        claimlabservice.rejection_reason = REJECTION_REASON_FREQUENCY_FAILURE
+        errors += [{'code': REJECTION_REASON_FREQUENCY_FAILURE,
+                    'message': _("claim.validation.claimlabservice_frequency_validity") % {
                         'code': claim.code
                     },
                     'detail': claim.uuid}]
@@ -451,6 +538,37 @@ def validate_service_product_family(claimservice, target_date, service, insuree_
 
     return errors
 
+def validate_lab_service_product_family(claimlabservice, target_date, lab_service, insuree_id, adult, claim):
+    errors = []
+    found = False
+
+    with get_products(target_date, lab_service.id, insuree_id, adult, 'Service') as cursor:  # or 'LabService' if you create a new type
+        for (product_id, product_lab_service_id, insuree_policy_effective_date, policy_effective_date, expiry_date,
+             policy_stage) in cursor.fetchall():
+            found = True
+            core = __import__("core")
+            insuree_policy_effective_date = core.datetime.date.from_ad_date(
+                insuree_policy_effective_date)
+            expiry_date = core.datetime.date.from_ad_date(expiry_date)
+ 
+            product_lab_service = ProductLaboratoryService.objects.get(pk=product_lab_service_id)
+            errors += check_service_item_waiting_period(policy_stage, policy_effective_date,
+                                                        insuree_policy_effective_date, lab_service, adult,
+                                                        product_lab_service, target_date, claimlabservice)
+            errors += check_service_item_max_provision(adult, product_lab_service, lab_service, insuree_policy_effective_date,
+                                                       expiry_date, insuree_id, claimlabservice)
+
+
+        if not found:
+            claimlabservice.rejection_reason = REJECTION_REASON_NO_PRODUCT_FOUND
+            errors += [{'code': REJECTION_REASON_NO_PRODUCT_FOUND,
+                        'message': _("claim.validation.product_family.no_product_found") % {
+                            'code': claimlabservice.claim.code,
+                            'element': str(lab_service)},
+                        'detail': claimlabservice.claim.uuid}]
+
+    return errors
+
 def check_service_item_waiting_period(policy_stage, policy_effective_date, insuree_policy_effective_date, service_or_item,
                                  adult, product_service_item, target_date, claim_service_item):
     errors = []
@@ -508,12 +626,18 @@ def check_service_item_max_provision(adult, product_service_item, service_or_ite
 
 def _get_total_qty_provided(claim_service_item, service_or_item, insuree_policy_effective_date,
                             expiry_date, insuree_id):
+    if isinstance(service_or_item, LaboratoryService):
+        field_name = 'lab_service'
+    elif isinstance(service_or_item, Service):
+        field_name = 'service'
+    else:
+        field_name = 'item'
+    
     return claim_service_item.__class__.objects \
             .annotate(target_date=Coalesce("claim__date_to", "claim__date_from")) \
             .filter(Q(rejection_reason=0) | Q(rejection_reason__isnull=True),
                     validity_to__isnull=True,
-                    **{
-                        f"{'service' if isinstance(service_or_item, Service) else 'item'}_id": service_or_item.id},
+                    **{f"{field_name}_id": service_or_item.id},
                     policy__validity_to__isnull=True,
                     target_date__gte=insuree_policy_effective_date,
                     target_date__lte=expiry_date,
@@ -811,12 +935,13 @@ def validate_assign_prod_elt(claim, elt, elt_ref, elt_qs, target_date, policies=
     return []
 
 
-def validate_assign_prod_to_claimitems_and_services(claim, policies=None, services=None, items=None):
+def validate_assign_prod_to_claimitems_and_services(claim, policies=None, services=None, items=None, lab_services=None):
     errors = []
     target_date = get_claim_target_date(claim)
     if not policies:
         policies = get_valid_policies_qs(claim.insuree.id, target_date)
     logger.debug("[claim: %s] validate_assign_prod_to_claimitems_and_services", claim.uuid)
+    
     if items is None:
         items = list(
             claim.items.filter(validity_to__isnull=True) 
@@ -827,6 +952,12 @@ def validate_assign_prod_to_claimitems_and_services(claim, policies=None, servic
             claim.services.filter(validity_to__isnull=True) 
             .filter(Q(rejection_reason=0) | Q(rejection_reason__isnull=True))
         )
+    if lab_services is None:  
+        lab_services = list(
+            claim.lab_services.filter(validity_to__isnull=True) 
+            .filter(Q(rejection_reason=0) | Q(rejection_reason__isnull=True))
+        )
+    
     for claimitem in [i for i in items if not i.rejection_reason]:
         logger.debug("[claim: %s] validating item %s", claim.uuid, claimitem.id)
         errors += validate_assign_prod_elt(
@@ -846,6 +977,22 @@ def validate_assign_prod_to_claimitems_and_services(claim, policies=None, servic
                 service_id=claimservice.service_id, 
                 product__in=[p.product for p in policies]
             ),
+            target_date=target_date,
+            policies=policies
+        )
+    
+    # Add lab services validation
+    for claimlabservice in [ls for ls in lab_services if not ls.rejection_reason]:
+        logger.debug("[claim: %s] validating lab service %s", claim.uuid, claimlabservice.id)
+
+        product_qs = ProductLaboratoryService.objects.filter(
+            lab_service_id=claimlabservice.lab_service_id, 
+            product__in=[p.product for p in policies]
+        )
+
+        errors += validate_assign_prod_elt(
+            claim, claimlabservice, claimlabservice.lab_service,
+            product_qs,
             target_date=target_date,
             policies=policies
         )
@@ -932,8 +1079,8 @@ def fetch_policies(claim, target_date, policies=None):
         policies = get_valid_policies_qs(claim.insuree.id, target_date)
     return policies
 
-def fetch_items_and_services(claim, items=None, services=None):
-    """Retrieve claim items and services if not provided."""
+def fetch_items_and_services(claim, items=None, services=None, lab_services=None):
+    """Retrieve claim items, services, and lab services if not provided."""
     if items is None:
         items = list(claim.items.filter(
             item__isnull=False,
@@ -950,7 +1097,15 @@ def fetch_items_and_services(claim, items=None, services=None):
         ).filter(
             Q(Q(rejection_reason=0) | Q(rejection_reason__isnull=True))
         ))
-    return items, services
+    if lab_services is None:  
+        lab_services = list(claim.lab_services.filter(
+            lab_service__isnull=False,
+            product__isnull=False,
+            validity_to__isnull=True,
+        ).filter(
+            Q(Q(rejection_reason=0) | Q(rejection_reason__isnull=True))
+        ))
+    return items, services, lab_services
 
 def get_policy_and_product_info(policies, items, services, target_date):
     """Extract policy and product information."""
@@ -1457,12 +1612,12 @@ def update_claim_status(claim, is_process, deductibles, audit_user_id, products)
     claim.save()
     return []
 
-def process_dedrem(claim, audit_user_id=-1, is_process=False, policies=None, items=None, services=None):
+def process_dedrem(claim, audit_user_id=-1, is_process=False, policies=None, items=None, services=None, lab_services=None):
     """Main function to process claim deductions and remunerations."""
     errors, target_date, category, hospitalization, hf_level = initialize_dedrem_processing(claim)
     archive_old_dedrems(claim)
     policies = fetch_policies(claim, target_date, policies)
-    items, services = fetch_items_and_services(claim, items, services)
+    items, services = fetch_items_and_services(claim, items, services, lab_services)
     policies_id, products = get_policy_and_product_info(policies, items, services, target_date)
     claim_deductibles = {}
     for policy_id in policies_id:
@@ -1480,7 +1635,8 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False, policies=None, ite
 
         itmsrv =  [
             *items,
-            *services
+            *services,
+            *lab_services
         ]
         
         

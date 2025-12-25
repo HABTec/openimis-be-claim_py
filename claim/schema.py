@@ -34,6 +34,7 @@ class Query(graphene.ObjectType):
         orderBy=graphene.List(of_type=graphene.String),
         items=graphene.List(of_type=graphene.String),
         services=graphene.List(of_type=graphene.String),
+        lab_services=graphene.List(of_type=graphene.String),
         json_ext=graphene.JSONString(),
         attachment_status=graphene.Int(required=False),
         care_type=graphene.String(required=False),
@@ -170,13 +171,17 @@ class Query(graphene.ObjectType):
 
         items = kwargs.get("items", None)
         services = kwargs.get("services", None)
+        lab_services = kwargs.get("lab_services", None) 
 
         if items:
             filters.append(Q(items__item__code__in=items))
 
         if services:
             filters.append(Q(services__service__code__in=services))
-
+            
+        if lab_services:
+            filters.append(Q(lab_services__lab_service__code__in=lab_services))
+                
         attachment_status = kwargs.get("attachment_status", 0)
         if attachment_status == AttachmentStatusEnum.WITH.value:
             filters.append(Q(attachments__isnull=False))

@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 import logging
 from typing import Callable, Dict
 
-from medical.models import Item, Service
+from medical.models import Item, Service, LaboratoryService
 
 import core
 from core.models import Officer
@@ -15,12 +15,13 @@ from core.signals import register_service_signal
 from .apps import ClaimConfig
 from django.conf import settings
 
-from claim.models import Claim, ClaimItem, ClaimService, ClaimDetail, ClaimDedRem, FeedbackPrompt, ReturnedClaim
+from claim.models import Claim, ClaimItem, ClaimService, ClaimDetail, ClaimDedRem, FeedbackPrompt, ReturnedClaim, ClaimLaboratoryService
 from product.models import ProductItemOrService
 from policy.models import Policy
 from claim.utils import (
     process_items_relations,
     process_services_relations,
+    process_lab_services_relations,
     get_valid_policies_qs,
     get_claim_target_date,
     approved_amount
@@ -67,6 +68,17 @@ class ClaimItemSubmit(ClaimElementSubmit):
         item = Item.objects.filter(validity_to__isnull=True, code=self.code).get()
         return ClaimItem(qty_provided=self.quantity, price_asked=self.price, item=item)
 
+@core.comparable
+class ClaimLaboratoryServiceSubmit(ClaimElementSubmit):
+    def __init__(self, code, quantity, price=None):
+        super().__init__(type='LabService',
+                         code=code,
+                         price=price,
+                         quantity=quantity)
+
+    def to_claim_provision(self):
+        lab_service = LaboratoryService.objects.filter(validity_to__isnull=True, code=self.code).get()
+        return ClaimLaboratoryService(qty_provided=self.quantity, price_asked=self.price, lab_service=lab_service)
 
 @core.comparable
 class ClaimServiceSubmit(ClaimElementSubmit):
@@ -86,7 +98,7 @@ class ClaimSubmit(object):
     def __init__(self, date, code, icd_code, total, start_date,
                  insuree_chf_id, health_facility_code,
                  claim_admin_code,
-                 item_submits=None, service_submits=None,
+                 item_submits=None, service_submits=None, lab_service_submits=None,
                  end_date=None,
                  icd_code_1=None, icd_code_2=None, icd_code_3=None, icd_code_4=None,
                  visit_type=None, guarantee_no=None,
@@ -110,6 +122,7 @@ class ClaimSubmit(object):
         self.comment = comment
         self.items = item_submits
         self.services = service_submits
+        self.lab_services = lab_service_submits
 
     def _details_to_xmlelt(self, xmlelt):
         ET.SubElement(xmlelt, 'ClaimDate').text = self.date.strftime(
@@ -155,6 +168,7 @@ class ClaimSubmit(object):
         self._details_to_xmlelt(details)
         self.add_elt_list_to_xmlelt(xmlelt, 'Items', self.items)
         self.add_elt_list_to_xmlelt(xmlelt, 'Services', self.services)
+        self.add_elt_list_to_xmlelt(xmlelt, 'LabServices', self.lab_services) 
 
     def to_xml(self):
         claim_xml = ET.Element('Claim')
@@ -279,6 +293,17 @@ def formatClaimItem(i):
     }
 
 
+def formatClaimLaboratoryService(ls):
+    return {
+        "lab_service": str(ls.lab_service),
+        "quantity": ls.qty_provided,
+        "price": ls.price_asked,
+        "explanation": ls.explanation,
+        "lab_result": ls.lab_result,
+        "specimen_type": ls.specimen_type,
+        "collection_date": ls.collection_date.isoformat() if ls.collection_date else None,
+        "result_date": ls.result_date.isoformat() if ls.result_date else None
+    }
 class ClaimReportService(object):
     def __init__(self, user):
         self.user = user
@@ -314,6 +339,7 @@ class ClaimReportService(object):
             "claimed": claim.claimed,
             "services": [formatClaimService(s) for s in claim.services.all()],
             "items": [formatClaimItem(i) for i in claim.items.all()],
+            "lab_services": [formatClaimLaboratoryService(ls) for ls in claim.lab_services.all()], 
         }
 
 
@@ -362,17 +388,19 @@ class ClaimCreateService:
     def _create_claim_from_dict(self, claim_submit_data):
         items = claim_submit_data.pop('items', [])
         services = claim_submit_data.pop('services', [])
+        lab_services = claim_submit_data.pop('lab_services', []) 
         claim_submit_data.pop('service_item_set', [])
         claim_submit_data.pop('service_service_set', [])
         claim = Claim.objects.create(**claim_submit_data)
-        self.__process_items(claim, items, services)
+        self.__process_items(claim, items, services, lab_services)
         claim.save()
         return claim
 
-    def __process_items(self, claim, items, services):
+    def __process_items(self, claim, items, services, lab_services):
         claimed = 0
         claimed += process_items_relations(self.user, claim, items)
         claimed += process_services_relations(self.user, claim, services)
+        claimed += process_lab_services_relations(self.user, claim, lab_services) 
         claim.claimed = claimed
 
 
@@ -388,8 +416,13 @@ def update_sum_claims(claim):
             service_sum=Sum(F('price_asked')*F('qty_provided'))).values('service_sum').order_by()[:1],
         output_field=FloatField()
     )
+    lab_service_asked = Subquery( 
+        ClaimLaboratoryService.objects.filter(claim=OuterRef('pk')).filter(legacy_id__isnull=True).values('claim_id').annotate(
+            lab_service_sum=Sum(F('price_asked')*F('qty_provided'))).values('lab_service_sum').order_by()[:1],
+        output_field=FloatField()
+    )
     Claim.objects.filter(id=claim.id).update(
-        claimed=Coalesce(item_asked, 0) + Coalesce(service_asked, 0)
+        claimed=Coalesce(item_asked, 0) + Coalesce(service_asked, 0) + Coalesce(lab_service_asked, 0)
     )
 
 
@@ -441,7 +474,8 @@ def claim_create(data, user):
     data['code'] = generated_code
     data['audit_user_id'] = user.id_for_audit
     claim = Claim()
-    set_reduced_attr(claim, data, ['items', 'services'])
+    set_reduced_attr(claim, data, ['items', 'services', 'lab_services'])
+     # set validity_from
     claim.save()
     claim_create_items_and_services(claim, data, user)
     return claim
@@ -453,10 +487,11 @@ def claim_update(claim, data, user):
     # reset the non required fields
     # (each update is 'complete', necessary to be able to set 'null')
     reset_claim_before_update(claim)
-    set_reduced_attr(claim, data, ['items', 'services'])
+    set_reduced_attr(claim, data, ['items', 'services', 'lab_services'])
     from core.utils import TimeUtils
     claim.items.update(validity_to=TimeUtils.now())
     claim.services.update(validity_to=TimeUtils.now())
+    claim.lab_services.update(validity_to=TimeUtils.now())
     claim_create_items_and_services(claim, data, user)
     return claim
 
@@ -470,9 +505,11 @@ def set_reduced_attr(obj, data, exclusions):
 def claim_create_items_and_services(claim, data, user):
     items = data.pop('items') if 'items' in data else []
     services = data.pop('services') if 'services' in data else []
+    lab_services = data.pop('lab_services') if 'lab_services' in data else []  
     claimed = 0
     claimed += process_items_relations(user, claim, items)
     claimed += process_services_relations(user, claim, services)
+    claimed += process_lab_services_relations(user, claim, lab_services)
     claim.claimed = claimed
     claim.save()
 
@@ -494,6 +531,7 @@ def update_or_create_claim(data, user):
 
 def validate_claim_data(data, user):
     services = data.get('services') if 'services' in data else []
+    lab_services = data.get('lab_services') if 'lab_services' in data else [] 
     claim_uuid = data.get("uuid", None)
     restore = data.get('restore', None)
     current_claim = Claim.objects.filter(uuid=claim_uuid).first()
@@ -524,6 +562,10 @@ def validate_claim_data(data, user):
         for service in services:
             if service["qty_provided"] > 1 and not service.get("explanation"):
                 raise ValidationError(_("mutation.service_explanation_required"))
+    if ClaimConfig.claim_validation_multiple_lab_services_explanation_required:
+        for lab_service in lab_services:
+            if lab_service.get("qty_provided", 0) > 1 and not lab_service.get("explanation"):
+                raise ValidationError(_("mutation.lab_service_explanation_required"))
 
 def validate_number_of_additional_diagnoses(incoming_data):
     additional_diagnoses_count = 0
@@ -594,6 +636,7 @@ def processing_claim(claim, user, is_process=False, validate=True):
     errors = []
     items = None
     services = None
+    lab_services = None 
     target_date = get_claim_target_date(claim)
     if claim.insuree is not None:
         policies = get_valid_policies_qs(claim.insuree.id, target_date)
@@ -603,10 +646,10 @@ def processing_claim(claim, user, is_process=False, validate=True):
         errors = validate_claim(claim, False, policies)
         logger.debug("ProcessClaimsMutation: claim %s validated, nb of errors: %s", claim.uuid, len(errors))
         if len(errors) == 0:
-            errors = validate_assign_prod_to_claimitems_and_services(claim, policies=policies, items=items, services=services)
+            errors = validate_assign_prod_to_claimitems_and_services(claim, policies=policies, items=items, services=services, lab_services=lab_services)
             logger.debug("ProcessClaimsMutation: claim %s assigned, nb of errors: %s", claim.uuid, len(errors))
     if len(errors) == 0:    
-        errors = process_dedrem(claim, user.id_for_audit, is_process, policies=policies, items=items, services=services)
+        errors = process_dedrem(claim, user.id_for_audit, is_process, policies=policies, items=items, services=services, lab_services=lab_services)
         logger.debug("ProcessClaimsMutation: claim %s processed for dedrem, nb of errors: %s", claim.uuid,
                     len(errors))
     if len(errors) > 0:
@@ -673,8 +716,9 @@ def details_with_relative_prices(details):
 
 
 def with_relative_prices(claim):
-    return details_with_relative_prices(claim.items) or details_with_relative_prices(claim.services)
-
+    return (details_with_relative_prices(claim.items) or 
+            details_with_relative_prices(claim.services) or 
+            details_with_relative_prices(claim.lab_services)) 
 
 def set_claims_status(uuids, field, status, audit_data=None, user=None):
     errors = []
