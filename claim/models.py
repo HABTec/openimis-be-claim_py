@@ -337,8 +337,12 @@ class ClaimDetailManager(core_models.CachedManager):
     def filter(self, *args, **kwargs):
         keys = [x for x in kwargs if "itemsvc" in x]
         for key in keys:
-            new_key = key.replace("itemsvc", self.model.model_prefix)
-            kwargs[new_key] = kwargs.pop(key)
+            if "lab_service" in key:
+                new_key = key.replace("lab_service", self.model.model_prefix)
+                kwargs[new_key] = kwargs.pop(key)
+            else:
+                new_key = key.replace("itemsvc", self.model.model_prefix)
+                kwargs[new_key] = kwargs.pop(key)
         return super(ClaimDetailManager, self).filter(*args, **kwargs)
 
 
@@ -614,3 +618,72 @@ class ClaimDedRem(core_models.VersionedModel):
     class Meta:
         managed = True
         db_table = 'tblClaimDedRem'
+
+
+class ClaimLaboratoryService(core_models.VersionedModel, ClaimDetail, core_models.ExtendableModel):
+    model_prefix = "lab_service"
+    
+    id = models.AutoField(db_column='ClaimLabServiceID', primary_key=True)
+    claim = models.ForeignKey(Claim, models.DO_NOTHING,
+                              db_column='ClaimID', related_name='lab_services')
+    lab_service = models.ForeignKey(
+        medical_models.LaboratoryService, models.DO_NOTHING, db_column='LabServiceID')
+    product = models.ForeignKey(product_models.Product,
+                                models.DO_NOTHING, db_column='ProdID',
+                                blank=True, null=True,
+                                related_name="claim_lab_services")
+    status = models.SmallIntegerField(db_column='ClaimLabServiceStatus')
+    qty_provided = models.DecimalField(
+        db_column='QtyProvided', max_digits=18, decimal_places=2)
+    qty_approved = models.DecimalField(
+        db_column='QtyApproved', max_digits=18, decimal_places=2, blank=True, null=True)
+    price_asked = models.DecimalField(
+        db_column='PriceAsked', max_digits=18, decimal_places=2)
+    price_adjusted = models.DecimalField(
+        db_column='PriceAdjusted', max_digits=18, decimal_places=2, blank=True, null=True)
+    price_approved = models.DecimalField(
+        db_column='PriceApproved', max_digits=18, decimal_places=2, blank=True, null=True)
+    price_valuated = models.DecimalField(
+        db_column='PriceValuated', max_digits=18, decimal_places=2, blank=True, null=True)
+    explanation = models.TextField(
+        db_column='Explanation', blank=True, null=True)
+    justification = models.TextField(
+        db_column='Justification', blank=True, null=True)
+    rejection_reason = models.SmallIntegerField(
+        db_column='RejectionReason', blank=True, null=True)
+    audit_user_id = models.IntegerField(db_column='AuditUserID')
+    validity_from_review = fields.DateTimeField(
+        db_column='ValidityFromReview', blank=True, null=True)
+    validity_to_review = fields.DateTimeField(
+        db_column='ValidityToReview', blank=True, null=True)
+    audit_user_id_review = models.IntegerField(
+        db_column='AuditUserIDReview', blank=True, null=True)
+    limitation_value = models.DecimalField(
+        db_column='LimitationValue', max_digits=18, decimal_places=2, blank=True, null=True)
+    limitation = models.CharField(
+        db_column='Limitation', max_length=1, blank=True, null=True)
+    policy = models.ForeignKey(
+        policy_models.Policy, models.DO_NOTHING, db_column='PolicyID', blank=True, null=True)
+    remunerated_amount = models.DecimalField(
+        db_column='RemuneratedAmount', max_digits=18, decimal_places=2, blank=True, null=True)
+    deductable_amount = models.DecimalField(
+        db_column='DeductableAmount', max_digits=18, decimal_places=2, blank=True, null=True)
+    exceed_ceiling_amount = models.DecimalField(
+        db_column='ExceedCeilingAmount', max_digits=18, decimal_places=2, blank=True, null=True)
+    price_origin = models.CharField(
+        db_column='PriceOrigin', max_length=1, blank=True, null=True)
+    exceed_ceiling_amount_category = models.DecimalField(
+        db_column='ExceedCeilingAmountCategory', max_digits=18, decimal_places=2, blank=True, null=True)
+    objects = ClaimDetailManager()
+    availability = models.BooleanField(db_column="availability", default=True)
+    
+    # Additional fields specific to laboratory services
+    lab_result = models.TextField(db_column='LabResult', blank=True, null=True)
+    specimen_type = models.CharField(db_column='SpecimenType', max_length=50, blank=True, null=True)
+    collection_date = fields.DateField(db_column='CollectionDate', blank=True, null=True)
+    result_date = fields.DateField(db_column='ResultDate', blank=True, null=True)
+
+    class Meta:
+        managed = True
+        db_table = 'tblClaimLabServices'
+

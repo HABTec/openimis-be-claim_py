@@ -26,7 +26,7 @@ from django.utils.translation import gettext as _
 from graphene import InputObjectType
 from claim.gql_queries import ClaimGQLType
 from claim.models import Claim, Feedback, FeedbackPrompt, ClaimDetail, ClaimItem, ClaimService, ClaimAttachment, \
-    ClaimDedRem, GeneralClaimAttachmentType, ClaimAttachmentType, ClaimServiceService
+    ClaimDedRem, GeneralClaimAttachmentType, ClaimAttachmentType, ClaimServiceService, ClaimLaboratoryService
 from claim.attachment_strategies import *
 
 from product.models import ProductItemOrService
@@ -146,6 +146,47 @@ class ClaimServiceInputType(InputObjectType):
     service_service_set = graphene.List(
         ClaimSubServiceInputType, required=False)
     availability = graphene.Boolean(required=False)
+
+class ClaimLaboratoryServiceInputType(InputObjectType):
+    id = graphene.Int(required=False)
+    lab_service_id = graphene.Int(required=True)
+    status = TinyInt(required=True)
+    qty_provided = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    qty_approved = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    price_asked = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    price_adjusted = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    price_approved = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    price_valuated = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    explanation = graphene.String(required=False)
+    justification = graphene.String(required=False)
+    rejection_reason = SmallInt(required=False)
+
+    validity_from_review = graphene.DateTime(required=False)
+    validity_to_review = graphene.DateTime(required=False)
+    limitation_value = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    limitation = graphene.String(required=False)
+    remunerated_amount = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    deductable_amount = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    exceed_ceiling_amount = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    price_origin = graphene.String(required=False)
+    exceed_ceiling_amount_category = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    availability = graphene.Boolean(required=False)
+
+    lab_result = graphene.String(required=False)
+    specimen_type = graphene.String(required=False)
+    collection_date = graphene.Date(required=False)
+    result_date = graphene.Date(required=False)
 
 
 class FeedbackInputType(InputObjectType):
@@ -272,6 +313,7 @@ class ClaimInputType(OpenIMISMutation.Input):
 
     items = graphene.List(ClaimItemInputType, required=False)
     services = graphene.List(ClaimServiceInputType, required=False)
+    lab_services = graphene.List(ClaimLaboratoryServiceInputType, required=False) 
 
 class ReturnOrResubmitClaimInputType(OpenIMISMutation.Input):
     uuid = graphene.String()
@@ -626,6 +668,8 @@ class ClaimSubmissionStatsMixin:
         claim_item_query = ClaimItem.objects.filter(claim__in=claims_query)
         claim_service_query = ClaimService.objects.filter(
             claim__in=claims_query)
+        claim_lab_service_query = ClaimLaboratoryService.objects.filter( 
+            claim__in=claims_query)
         claim_stats = claims_query.aggregate(
             submitted=Count('uuid', output_field=IntegerField()),
             checked=Count(Case(When(status=4, then=1),
@@ -649,8 +693,14 @@ class ClaimSubmissionStatsMixin:
             services_rejected=Count(
                 Case(When(status=2, then=1), output_field=IntegerField())),
         )
+        lab_service_stats = claim_lab_service_query.aggregate(
+            lab_services_passed=Count(
+                Case(When(status=1, then=1), output_field=IntegerField())),
+            lab_services_rejected=Count(
+                Case(When(status=2, then=1), output_field=IntegerField())),
+        )
 
-        return {**claim_stats, **item_stats, **service_stats}
+        return {**claim_stats, **item_stats, **service_stats, **lab_service_stats} 
 
     @classmethod
     def _parse_submission_stats(cls, claim_submission_stats):
@@ -694,6 +744,8 @@ class SubmitClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
             "items_rejected": claim_submission_stats["items_rejected"],
             "services_passed": claim_submission_stats["services_passed"],
             "services_rejected": claim_submission_stats["services_rejected"],
+            "lab_services_passed": claim_submission_stats["lab_services_passed"], 
+            "lab_services_rejected": claim_submission_stats["lab_services_rejected"], 
             "header": "Claims submitted",
             # failed
         }
@@ -944,6 +996,7 @@ class SaveClaimReviewMutation(OpenIMISMutation):
         adjustment = graphene.String(required=False)
         items = graphene.List(ClaimItemInputType, required=False)
         services = graphene.List(ClaimServiceInputType, required=False)
+        lab_services = graphene.List(ClaimLaboratoryServiceInputType, required=False) 
         submit_review = graphene.Boolean(required=False)
 
     @classmethod
@@ -1032,6 +1085,13 @@ class SaveClaimReviewMutation(OpenIMISMutation):
                                 claimed += price
                                 claim_item_to_update.update(
                                     **claim_service_item)
+            
+            lab_services = data.pop('lab_services') if 'lab_services' in data else []
+            for lab_service in lab_services:
+                lab_service_id = lab_service.pop('id')
+                claim.lab_services.filter(id=lab_service_id).update(**lab_service)
+                if lab_service['status'] == ClaimLaboratoryService.STATUS_PASSED:
+                    all_rejected = False
 
                 if service['status'] == ClaimService.STATUS_PASSED:
                     all_rejected = False
@@ -1242,6 +1302,7 @@ class DeleteClaimsMutation(OpenIMISMutation):
                 .filter(uuid=claim_uuid) \
                 .prefetch_related(Prefetch('items', queryset=ClaimItem.objects.filter(*filter_validity())))\
                 .prefetch_related(Prefetch('services', queryset=ClaimService.objects.filter(*filter_validity())))\
+                .prefetch_related(Prefetch('lab_services', queryset=ClaimLaboratoryService.objects.filter(*filter_validity())))\
                 .first()
             if claim is None:
                 errors += {

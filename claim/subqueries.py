@@ -2,7 +2,7 @@ from claim.models import Claim, ClaimDetail
 from django.db.models import OuterRef, Subquery, Avg, Q, Sum, F, FloatField, ExpressionWrapper, DecimalField, Subquery, OuterRef, Case, Value, When
 from django.db.models.functions import Coalesce
 from core import filter_validity
-from claim.models import ClaimItem, Claim, ClaimService
+from claim.models import ClaimItem, Claim, ClaimService, ClaimLaboratoryService
 # row_id = models.BinaryField(db_column='RowID', blank=True, null=True)
 
 # subqueries
@@ -65,6 +65,8 @@ total_srv_adjusted_exp = total_elm_adjusted_exp(prefix='services__')
 
 total_itm_adjusted_exp = total_elm_adjusted_exp(prefix='items__')
 
+# Subquery for total_lab_srv_adjusted
+total_lab_srv_adjusted_exp = total_elm_adjusted_exp(prefix='lab_services__')
 
 # Subquery for total_itm_approved
 
@@ -91,6 +93,16 @@ total_srv_approved_exp = Coalesce(
     ), Value(0.0), output_field=DecimalField()
 )
 
+# Subquery for total_lab_srv_approved
+total_lab_srv_approved_exp = Coalesce(
+    Sum(
+        Case(
+            When(Q(Q(status=Claim.STATUS_REJECTED) | Q(lab_services__status=ClaimDetail.STATUS_REJECTED)), then=Value(0.0)),
+            default=elm_approved_exp(prefix='lab_services__'),
+            output_field=DecimalField()
+        )
+    ), Value(0.0), output_field=DecimalField()
+)
 
 
 def update_claim_remunerated(claims_qs, ratio=1, updates={}):
@@ -114,7 +126,16 @@ def update_claim_remunerated(claims_qs, ratio=1, updates={}):
             output_field=DecimalField()
         )
     )
-
+    ClaimLaboratoryService.objects.filter(  
+        claim__in=claims_qs,
+        *filter_validity()
+    ).filter(Q(Q(rejection_reason__isnull=True) | Q(rejection_reason=0))
+    ).update(
+        remunerated_amount=ExpressionWrapper(
+            ratio * elm_approved_exp(),
+            output_field=DecimalField()
+        )
+    )
 
 def update_claim_total(claims_qs, ratio=1, claim_based_value_subquery=0, updates={}, field='approved', elm_sum=None):
 
@@ -123,9 +144,8 @@ def update_claim_total(claims_qs, ratio=1, claim_based_value_subquery=0, updates
             ratio * elm_approved_exp(),
             output_field=DecimalField()
         )
-        
-
-    service_subquery = Subquery(
+    
+    item_subquery = Subquery(
         ClaimItem.objects.filter(
             claim=OuterRef('pk'),
             *filter_validity(),
@@ -136,7 +156,8 @@ def update_claim_total(claims_qs, ratio=1, claim_based_value_subquery=0, updates
         ).values('elm_sum').order_by()[:1],
         output_field=FloatField()
     )
-    item_subquery = Subquery(
+    
+    service_subquery = Subquery(
         ClaimService.objects.filter(
             claim=OuterRef('pk'),
             *filter_validity(),
@@ -146,11 +167,28 @@ def update_claim_total(claims_qs, ratio=1, claim_based_value_subquery=0, updates
             elm_sum=elm_sum
         ).values('elm_sum').order_by()[:1],
         output_field=FloatField()
-    )       
-    updates[field] = Coalesce(service_subquery, 0) + Coalesce(item_subquery, 0) + Coalesce(claim_based_value_subquery, 0) 
-    claims_qs.update(
-        **updates
     )
+    
+    lab_service_subquery = Subquery(
+        ClaimLaboratoryService.objects.filter(
+            claim=OuterRef('pk'),
+            *filter_validity(),
+        ).filter(
+            Q(Q(rejection_reason__isnull=True) | Q(rejection_reason=0))
+        ).values('claim_id').annotate(
+            elm_sum=elm_sum
+        ).values('elm_sum').order_by()[:1],
+        output_field=FloatField()
+    )
+    
+    updates[field] = (
+        Coalesce(item_subquery, 0) + 
+        Coalesce(service_subquery, 0) + 
+        Coalesce(lab_service_subquery, 0) +  
+        Coalesce(claim_based_value_subquery, 0)
+    )
+    
+    claims_qs.update(**updates)
 
 
 def update_claim_approved(claims_qs, ratio=1, updates={}):

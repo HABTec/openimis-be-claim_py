@@ -9,7 +9,7 @@ from medical.schema import DiagnosisGQLType
 from claim_batch.schema import BatchRunGQLType
 from .apps import ClaimConfig
 from claim.models import (ClaimDedRem, Claim, Feedback, ClaimItem, ClaimService, ClaimAttachment,
-                          ClaimAttachmentType, ClaimServiceService, ClaimServiceItem)
+                          ClaimAttachmentType, ClaimServiceService, ClaimServiceItem, ClaimLaboratoryService)
 from core.models.user import ClaimAdmin
 from django.utils.translation import gettext as _
 from django.core.exceptions import PermissionDenied
@@ -113,6 +113,11 @@ class ClaimGQLType(DjangoObjectType):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
         return self.services.filter(legacy_id__isnull=True).filter(validity_to__isnull=True)
+    
+    def resolve_lab_services(self, info):
+        if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
+            raise PermissionDenied(_("unauthorized"))
+        return self.lab_services.filter(legacy_id__isnull=True).filter(validity_to__isnull=True)
 
     def resolve_client_mutation_id(self, info):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
@@ -187,6 +192,12 @@ class ClaimServiceGQLType(DjangoObjectType):
     class Meta:
         model = ClaimService
 
+class ClaimLaboratoryServiceGQLType(DjangoObjectType):
+    """
+    Contains the laboratory services within a specific Claim
+    """
+    class Meta:
+        model = ClaimLaboratoryService
 
 class ClaimServiceServiceGQLType(DjangoObjectType):
     """

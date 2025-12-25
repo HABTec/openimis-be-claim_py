@@ -1,7 +1,7 @@
 import math
 from django.db import transaction
-from claim.models import Claim, ClaimItem, ClaimService, ClaimDetail, ClaimServiceItem, ClaimServiceService
-from medical.models import Item, Service
+from claim.models import Claim, ClaimItem, ClaimService, ClaimDetail, ClaimServiceItem, ClaimServiceService, ClaimLaboratoryService
+from medical.models import Item, Service, LaboratoryService
 from django.core.exceptions import ValidationError, PermissionDenied
 from django.utils.translation import gettext as _
 from .apps import ClaimConfig
@@ -21,8 +21,12 @@ def process_child_relation(user, data_children, claim_id, children, create_hook)
         raise ValidationError(_("mutation.claim_item_service_maximum_amount_overshoot"))
     for data_elt in data_children:
         use_sub = create_hook == service_create_hook
-
-        claimed += calcul_amount_service(data_elt, use_sub)
+        is_lab_service = create_hook == lab_service_create_hook
+             
+        if is_lab_service:
+            claimed += generic_amount_claimdetail(data_elt)
+        else:
+            claimed += calcul_amount_service(data_elt, use_sub)
         
 
         elt_id = data_elt.pop('id') if 'id' in data_elt else None
@@ -98,29 +102,37 @@ def calcul_amount_service(elt, use_sub=True):
 def approved_amount(claim):
     if claim.status != Claim.STATUS_REJECTED:
         return Claim.objects.filter(id=claim.id).aggregate(
-            value=ExpressionWrapper(total_elm_approved_exp('items__') + total_elm_approved_exp('services__')
-            ,output_field=DecimalField())
+            value=ExpressionWrapper(
+                total_elm_approved_exp('items__') + 
+                total_elm_approved_exp('services__') + 
+                total_elm_approved_exp('lab_services__'),
+                output_field=DecimalField()
+            )
         )["value"] or 0
     else:
         return 0
-    
 
-def get_claim_product(claim, adult, target_date=None, items=None, services=None, assigned=False):
-    from product.models import Product, ProductItem, ProductService
+def get_claim_product(claim, adult, target_date=None, items=None, services=None, lab_services=None, assigned=False):
+    from product.models import Product, ProductItem, ProductService, ProductLaboratoryService
     from django.db.models import ExpressionWrapper, F, DateTimeField, OuterRef, IntegerField, Q, Prefetch
     from django.db.models.functions import Coalesce
+    
     if not target_date:
         target_date = get_claim_target_date(claim)
+    
     if items is None:
         items = claim.items.filter(*filter_validity(validity=target_date))    
     if services is None:
-        services = claim.services.filter(*filter_validity(validity=target_date))    
+        services = claim.services.filter(*filter_validity(validity=target_date))
+    if lab_services is None:  
+        lab_services = claim.lab_services.filter(*filter_validity(validity=target_date))
 
     qs = Product.objects 
     if assigned:
         qs = qs.filter(
-            Q(Q(n=[i.product_id for i in items]) 
-                | Q(id__in=[s.product_id for s in services]))
+            Q(Q(id__in=[i.product_id for i in items]) 
+              | Q(id__in=[s.product_id for s in services])
+              | Q(id__in=[ls.product_id for ls in lab_services]))  
         )
     else:
         qs = qs.filter(
@@ -134,21 +146,30 @@ def get_claim_product(claim, adult, target_date=None, items=None, services=None,
             *filter_validity(validity=target_date, prefix='policies__insuree_policies__')
         ).filter(
             Q(Q(items__item__in=[i.item_id for i in items]) 
-                | Q(services__service__in=[s.service_id for s in services]))
+              | Q(services__service__in=[s.service_id for s in services])
+              | Q(lab_services__lab_service__in=[ls.lab_service_id for ls in lab_services]))  
         )
-    return list(qs.prefetch_related(Prefetch(
+    
+    return list(qs.prefetch_related(
+        Prefetch(
             'items', 
             queryset=ProductItem.objects.filter(
                 *filter_validity(validity=target_date)
-            ).prefetch_related('item'))
-        ).prefetch_related(Prefetch(
+            ).prefetch_related('item')
+        ),
+        Prefetch(
             'services',
             queryset=ProductService.objects.filter(
                 *filter_validity(validity=target_date)
-            ).prefetch_related('service'))
-        ))
-
-
+            ).prefetch_related('service')
+        ),
+        Prefetch(  
+            'lab_services',
+            queryset=ProductLaboratoryService.objects.filter(
+                *filter_validity(validity=target_date)
+            ).prefetch_related('lab_service')
+        )
+    ))
 
 def __check_if_maximum_amount_overshoot(data_children, children):
     is_overshoot = False
@@ -162,6 +183,9 @@ def __check_if_maximum_amount_overshoot(data_children, children):
         elif children.model == ClaimService:
             current_service = Service.objects.get(id=entity['service_id'], validity_to__isnull=True)
             maximum_amount = int(current_service.maximum_amount) if current_service.maximum_amount else None
+        elif children.model == ClaimLaboratoryService:
+            current_lab_service = LaboratoryService.objects.get(id=entity['lab_service_id'], validity_to__isnull=True)
+            maximum_amount = int(current_lab_service.maximum_amount) if current_lab_service.maximum_amount else None
 
         if maximum_amount is not None and (quantity > maximum_amount):
             is_overshoot = True
@@ -175,6 +199,12 @@ def item_create_hook(claim_id, item):
     # but not in UI > always true?
     item['availability'] = True
     ClaimItem.objects.create(claim_id=claim_id, **item)
+
+def lab_service_create_hook(claim_id, lab_service):
+    # TODO: investigate 'availability' is mandatory,
+    # but not in UI > always true?
+    lab_service['availability'] = True
+    ClaimLaboratoryService.objects.create(claim_id=claim_id, **lab_service)
 
 
 def service_create_hook(claim_id, service):
@@ -246,6 +276,9 @@ def process_items_relations(user, claim, items):
 
 def process_services_relations(user, claim, services):
     return process_child_relation(user, services, claim.id, claim.services, service_create_hook)
+
+def process_lab_services_relations(user, claim, lab_services):
+    return process_child_relation(user, lab_services, claim.id, claim.lab_services, lab_service_create_hook)
 
 
 def autogenerate_nepali_claim_code(config):
