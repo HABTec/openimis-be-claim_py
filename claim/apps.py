@@ -73,7 +73,8 @@ DEFAULT_CFG = {
             "code": 4,
             "name": "Insufficient Details"
         }
-    ]
+    ],
+    "max_claimed_amount_to_be_flagged": 10000
 
 }
 
@@ -138,6 +139,7 @@ class ClaimConfig(AppConfig):
     additional_diagnosis_number_allowed = None  # Currently code supports 4 diagnoses maximum, going above will not work
     allowed_domains_attachments = None
     return_reasons = []
+    max_claimed_amount_to_be_flagged = 0
 
     def __load_config(self, cfg):
         for field in cfg:
