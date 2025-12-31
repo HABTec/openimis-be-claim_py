@@ -1,12 +1,13 @@
-from django.core.exceptions import ValidationError
-from django.utils.translation import gettext as _
-from claim.models import Claim
-from core.utils import TimeUtils
-from .apps import ClaimConfig
-
 import datetime
+import logging
 
+from django.utils.translation import gettext as _
+
+from claim.models import Claim
+from .apps import ClaimConfig
 from claim.utils import check_initial_status_permission, validate_status_transition
+
+logger = logging.getLogger(__name__)
 
 class ClaimStatusValidationRegistry:
     _validators = {}
@@ -70,8 +71,12 @@ def validate_insuree_check_in_limit(claim, user):
         if checkin_count >= 3:
             return Claim.STATUS_FLAGGED
 
-    except Exception as e:
-        return None
+    except Exception:
+        logger.exception(
+            "validate_insuree_check_in_limit failed for claim %s",
+            claim.uuid
+        )
+        raise
 
 
 
@@ -79,7 +84,7 @@ def validate_claimed_amount_limit(claim, user):
     """
     Validate if the claimed amount is more than 10,000 birr.
     """
-    if claim.claimed > ClaimConfig.max_claimed_amount_to_be_flagged:
+    if claim.claimed is not None and claim.claimed > ClaimConfig.max_claimed_amount_to_be_flagged:
         return Claim.STATUS_FLAGGED
     return None
 

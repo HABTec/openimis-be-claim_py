@@ -1143,16 +1143,18 @@ class ChangeClaimsStatusMutation(ClaimSubmissionStatsMixin, OpenIMISMutation):
 
             target_status = data.get("status")
             uuids = data.get("uuids", [])
-            client_mutation_id = data.get('client_mutation_id')
+            client_mutation_id = data.get("client_mutation_id")
             errors = []
+
             status_perms_map = get_status_permission_mapping()
-            
-            # Check permission for target status
+
             if target_status in status_perms_map:
                 required_perms = status_perms_map[target_status]
                 if required_perms and not user.has_perms(required_perms):
                     return [{
-                        "message": _("claim.mutation.no_permission_for_target_status") % {"status": target_status}
+                        "message": _("claim.mutation.no_permission_for_target_status") % {
+                            "status": target_status
+                        }
                     }]
                 if target_status == Claim.STATUS_REJECTED and not data.get("rejection_code"):
                     return [{
@@ -1166,56 +1168,63 @@ class ChangeClaimsStatusMutation(ClaimSubmissionStatsMixin, OpenIMISMutation):
                     claim = check_claim_location_access(claim_uuid, user)
                     if not claim:
                         errors.append({
-                            'uuid': claim_uuid,
-                            'message': _("claim.mutation.claim_not_found_or_no_location_access")
+                            "uuid": claim_uuid,
+                            "message": _("claim.mutation.claim_not_found_or_no_location_access")
                         })
                         continue
-                    
-                    validation_result_status = ClaimStatusValidationRegistry.validate(claim, target_status, user)
-                    final_status = validation_result_status if validation_result_status is not None else target_status
-                    
-                    if final_status not in status_updates:
-                        status_updates[final_status] = []
-                    status_updates[final_status].append(claim.uuid)
+
+                    validation_result_status = ClaimStatusValidationRegistry.validate(
+                        claim, target_status, user
+                    )
+                    final_status = (
+                        validation_result_status
+                        if validation_result_status is not None
+                        else target_status
+                    )
+
+                    status_updates.setdefault(final_status, []).append(claim.uuid)
 
                 except (ValidationError, PermissionDenied) as e:
                     errors.append({
-                        'uuid': claim_uuid,
-                        'message': str(e)
+                        "uuid": claim_uuid,
+                        "message": str(e)
                     })
-                    continue
                 except Exception as e:
                     errors.append({
-                        'uuid': claim_uuid,
-                        'message': _("claim.mutation.unexpected_error"),
-                        'detail': str(e)
+                        "uuid": claim_uuid,
+                        "message": _("claim.mutation.unexpected_error"),
+                        "detail": str(e)
                     })
-                    continue
-            
+
+            # Apply updates per final status
             for status, claim_uuids in status_updates.items():
                 mutation_errors = update_claims_status(
                     uuids=claim_uuids,
-                    field='status',
+                    field="status",
                     status=status,
                     user=user,
-                    rejection_code=data.get("rejection_code") if status == Claim.STATUS_REJECTED else None,
-                    rejection_note=data.get("rejection_note") if status == Claim.STATUS_REJECTED else None
+                    rejection_code=data.get("rejection_code")
+                    if status == Claim.STATUS_REJECTED else None,
+                    rejection_note=data.get("rejection_note")
+                    if status == Claim.STATUS_REJECTED else None,
                 )
                 if mutation_errors:
                     errors.extend(mutation_errors)
 
             if client_mutation_id:
-                cls.add_submission_stats_to_mutation_log(client_mutation_id, status_updates)
+                all_uuids = []
+                for u in status_updates.values():
+                    all_uuids.extend(u)
+
+                cls.add_submission_stats_to_mutation_log(
+                    client_mutation_id,
+                    all_uuids
+                )
 
             return errors
-        except Exception as e:
-            return [{'message': str(e)}]
 
-        except Exception as exc:
-            return [{
-                'message': _("claimClaimConfig.mutation.failed_to_change_status"),
-                'detail': str(exc)
-            }]
+        except Exception as e:
+            return [{"message": str(e)}]
 
 
 class ProcessClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
