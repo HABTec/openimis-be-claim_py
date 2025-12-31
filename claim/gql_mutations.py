@@ -41,6 +41,7 @@ from claim.services import validate_claim_data as service_validate_claim_data, \
 from claim.validations import REJECTION_REASON_INVALID_CLAIM
 from django.db import transaction
 import requests
+from claim.status_validations import ClaimStatusValidationRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -680,6 +681,8 @@ class ClaimSubmissionStatsMixin:
                            output_field=IntegerField())),
             rejected=Count(Case(When(status=1, then=1),
                            output_field=IntegerField())),
+            flagged=Count(Case(When(status=22, then=1),
+                           output_field=IntegerField())),
         )
         item_stats = claim_item_query.aggregate(
             items_passed=Count(Case(When(status=1, then=1),
@@ -1118,9 +1121,9 @@ class SaveClaimReviewMutation(OpenIMISMutation):
                 'message': _("claim.mutation.failed_to_update_claim") % {'code': claim.code if claim else None},
                 'detail': str(exc)}]
 
-class ChangeClaimsStatusMutation(OpenIMISMutation):
+class ChangeClaimsStatusMutation(ClaimSubmissionStatsMixin, OpenIMISMutation):
     """
-    Change the status of one or more claims
+    Change status of a selection of claims
     """
     _mutation_module = "claim"
     _mutation_class = "ChangeClaimsStatusMutation"
@@ -1130,6 +1133,7 @@ class ChangeClaimsStatusMutation(OpenIMISMutation):
         status = graphene.Int()
         rejection_code = graphene.Int(required=False)
         rejection_note = graphene.String(required=False)
+        client_mutation_id = graphene.String(required=False)
 
     @classmethod
     def async_mutate(cls, user, **data):
@@ -1137,70 +1141,90 @@ class ChangeClaimsStatusMutation(OpenIMISMutation):
             if type(user) is AnonymousUser or not user.id:
                 raise ValidationError(_("mutation.authentication_required"))
 
-            status = data.get("status")
+            target_status = data.get("status")
             uuids = data.get("uuids", [])
+            client_mutation_id = data.get("client_mutation_id")
             errors = []
+
             status_perms_map = get_status_permission_mapping()
-            
-            # Check permission for target status
-            if status in status_perms_map:
-                required_perms = status_perms_map[status]
+
+            if target_status in status_perms_map:
+                required_perms = status_perms_map[target_status]
                 if required_perms and not user.has_perms(required_perms):
                     return [{
-                        "message": _("claim.mutation.no_permission_for_target_status") % {"status": status}
+                        "message": _("claim.mutation.no_permission_for_target_status") % {
+                            "status": target_status
+                        }
                     }]
-                if status == Claim.STATUS_REJECTED and not data.get("rejection_code"):
+                if target_status == Claim.STATUS_REJECTED and not data.get("rejection_code"):
                     return [{
                         "message": _("claim.mutation.rejection_code_required")
                     }]
 
-            # Process each claim with individual checks
-            successful_uuids = []
+            status_updates = {}
+
             for claim_uuid in uuids:
                 try:
                     claim = check_claim_location_access(claim_uuid, user)
                     if not claim:
                         errors.append({
-                            'uuid': claim_uuid,
-                            'message': _("claim.mutation.claim_not_found_or_no_location_access")
+                            "uuid": claim_uuid,
+                            "message": _("claim.mutation.claim_not_found_or_no_location_access")
                         })
                         continue
 
-                    validate_status_transition(claim.status, status, user)
-                    check_initial_status_permission(claim.status, user)
-                    successful_uuids.append(claim_uuid)
+                    validation_result_status = ClaimStatusValidationRegistry.validate(
+                        claim, target_status, user
+                    )
+                    final_status = (
+                        validation_result_status
+                        if validation_result_status is not None
+                        else target_status
+                    )
+
+                    status_updates.setdefault(final_status, []).append(claim.uuid)
+
                 except (ValidationError, PermissionDenied) as e:
                     errors.append({
-                        'uuid': claim_uuid,
-                        'message': str(e)
+                        "uuid": claim_uuid,
+                        "message": str(e)
                     })
-                    continue
                 except Exception as e:
                     errors.append({
-                        'uuid': claim_uuid,
-                        'message': _("claim.mutation.unexpected_error"),
-                        'detail': str(e)
+                        "uuid": claim_uuid,
+                        "message": _("claim.mutation.unexpected_error"),
+                        "detail": str(e)
                     })
-                    continue
-            
-            if successful_uuids:
+
+            # Apply updates per final status
+            for status, claim_uuids in status_updates.items():
                 mutation_errors = update_claims_status(
-                    uuids=successful_uuids,
-                    field='status',
+                    uuids=claim_uuids,
+                    field="status",
                     status=status,
                     user=user,
-                    rejection_code=data.get("rejection_code"),
+                    rejection_code=data.get("rejection_code")
+                    if status == Claim.STATUS_REJECTED else None,
                     rejection_note=data.get("rejection_note")
+                    if status == Claim.STATUS_REJECTED else None,
                 )
                 if mutation_errors:
                     errors.extend(mutation_errors)
+
+            if client_mutation_id:
+                all_uuids = []
+                for u in status_updates.values():
+                    all_uuids.extend(u)
+
+                cls.add_submission_stats_to_mutation_log(
+                    client_mutation_id,
+                    all_uuids
+                )
+
             return errors
 
-        except Exception as exc:
-            return [{
-                'message': _("claim.mutation.failed_to_change_status"),
-                'detail': str(exc)
-            }]
+        except Exception as e:
+            return [{"message": str(e)}]
 
 
 class ProcessClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
