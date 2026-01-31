@@ -220,6 +220,10 @@ class ClaimSummaryGQLType(graphene.ObjectType):
     count = graphene.Int()
     total_approved = graphene.Float()
 
+class ClaimStatusAggregateGQLType(graphene.ObjectType):
+    status = graphene.Int()
+    count = graphene.Int()
+
 class ClaimReturnedReasonGQLType(graphene.ObjectType):
     code = graphene.Int()
     name = graphene.String()
