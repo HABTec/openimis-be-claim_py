@@ -8,7 +8,8 @@ from .services import check_unique_claim_code
 from .utils import check_status_permission, get_user_permitted_statuses
 import django
 from core.schema import signal_mutation_module_validate, signal_mutation_module_after_mutating
-from django.db.models import OuterRef, Subquery, Avg, Q, Sum
+from django.conf import settings
+from django.db.models import OuterRef, Subquery, Avg, Q, Sum, Count
 import graphene_django_optimizer as gql_optimizer
 from core.schema import OrderedDjangoFilterConnectionField, OfficerGQLType
 from core import filter_validity
@@ -18,7 +19,7 @@ from .models import ClaimMutation
 from django.utils.translation import gettext as _
 from graphene_django.filter import DjangoFilterConnectionField
 import ast
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from graphql_relay import from_global_id
 
 # We do need all queries and mutations in the namespace here.
@@ -94,6 +95,21 @@ class Query(graphene.ObjectType):
         description="Return predefined reasons for returned claims"
     )
 
+    claim_status_aggregate = graphene.List(
+        ClaimStatusAggregateGQLType,
+        statuses=graphene.List(of_type=graphene.Int),
+        status=graphene.Int(),
+        diagnosisVariance=graphene.Int(),
+        code_is_not=graphene.String(),
+        items=graphene.List(of_type=graphene.String),
+        services=graphene.List(of_type=graphene.String),
+        lab_services=graphene.List(of_type=graphene.String),
+        json_ext=graphene.JSONString(),
+        attachment_status=graphene.Int(required=False),
+        care_type=graphene.String(required=False),
+        show_restored=graphene.Boolean(required=False),
+    )
+
     def resolve_insuree_name_by_chfid(self, info, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_mutation_create_claims_perms)\
                 and not info.context.user.has_perms(ClaimConfig.gql_mutation_update_claims_perms):
@@ -132,6 +148,123 @@ class Query(graphene.ObjectType):
         claim.refresh_from_db() 
         return claim
 
+    @staticmethod
+    def _apply_row_security_filters(query, user):
+        if not settings.ROW_SECURITY:
+            return query
+        
+        if user.is_anonymous:
+            return Claim.objects.filter(id=-1)
+        
+        # TechnicalUsers don't have health_facility_id attribute
+        if hasattr(user._u, 'health_facility_id') and user._u.health_facility_id:
+            return query.filter(health_facility_id=user._u.health_facility_id)
+        else:
+            from core.models import TechnicalUser
+            if not isinstance(user._u, TechnicalUser):
+                return LocationManager().build_user_location_filter_query(
+                    user._u, prefix='health_facility__location', queryset=query, loc_types=['D'])
+        
+        return query
+
+    @staticmethod
+    def _build_claim_queryset_for_aggregate(info, **kwargs):
+        class AttachmentStatusEnum(Enum):
+            NONE = 0
+            WITH = 1
+            WITHOUT = 2
+        
+        if (
+            not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms)
+            and settings.ROW_SECURITY
+        ):
+            raise PermissionDenied(_("unauthorized"))
+        
+        query = Claim.filter_queryset()
+        
+        query = Query._apply_row_security_filters(query, info.context.user)
+        
+        filters = []
+        
+        # Handle status filtering
+        if kwargs.get("status") is not None and kwargs.get("statuses"):
+            raise ValidationError(
+                "Use either 'status' or 'statuses', not both."
+            )
+        requested_status = kwargs.get("status")
+        requested_statuses = kwargs.get("statuses")
+
+        if requested_statuses:
+            for st in requested_statuses:
+                check_status_permission(info.context.user, st)
+            filters.append(Q(status__in=requested_statuses))
+        elif requested_status is not None:
+            check_status_permission(info.context.user, requested_status)
+            filters.append(Q(status=requested_status))
+        else:
+            permitted_statuses = get_user_permitted_statuses(info.context.user)
+            if not permitted_statuses:
+                return Claim.objects.none()
+            filters.append(Q(status__in=permitted_statuses))
+
+        # Handle show_restored
+        show_restored = kwargs.get("show_restored", None)
+        if show_restored:
+            filters.append(Q(restore__isnull=False))
+
+        # Handle attachment_status
+        attachment_status = kwargs.get("attachment_status", 0)
+        if attachment_status == AttachmentStatusEnum.WITH.value:
+            filters.append(Q(attachments__isnull=False))
+        elif attachment_status == AttachmentStatusEnum.WITHOUT.value:
+            filters.append(Q(attachments__isnull=True))
+
+        # Handle care_type
+        care_type = kwargs.get("care_type", None)
+        if care_type:
+            filters.append(Q(care_type=care_type))
+
+        # Handle json_ext
+        json_ext = kwargs.get("json_ext", None)
+        if json_ext:
+            filters.append(Q(json_ext__jsoncontains=json_ext))
+        
+        # Handle diagnosisVariance
+        variance = kwargs.get("diagnosisVariance", None)
+        if variance:
+            from core import datetime, datetimedelta
+
+            last_year = datetime.date.today() + datetimedelta(years=-1)
+            diag_avg = (
+                Claim.objects.filter(*filter_validity(**kwargs))
+                .filter(date_claimed__gt=last_year)
+                .values("icd__code")
+                .filter(icd__code=OuterRef("icd__code"))
+                .annotate(diag_avg=Avg("approved"))
+                .values("diag_avg")
+            )
+            variance_filter = Q(claimed__gt=(
+                1 + variance / 100) * Subquery(diag_avg))
+            if not ClaimConfig.gql_query_claim_diagnosis_variance_only_on_existing:
+                diags = (
+                    Claim.objects.filter(*filter_validity(**kwargs))
+                    .filter(date_claimed__gt=last_year)
+                    .values("icd__code")
+                    .distinct()
+                )
+                variance_filter = Q(variance_filter | ~Q(icd__code__in=diags))
+            filters.append(variance_filter)
+        
+        # Handle code_is_not
+        code_is_not = kwargs.get("code_is_not", None)
+        
+        if len(filters):
+            query = query.filter(*filters)
+        if code_is_not:
+            query = query.exclude(code=code_is_not)
+        
+        return query
+    
     def resolve_claims(self, info, **kwargs):
         class AttachmentStatusEnum(Enum):
             NONE = 0
@@ -236,6 +369,43 @@ class Query(graphene.ObjectType):
             query = query.all()
         return gql_optimizer.query(query, info)
 
+    def resolve_claim_status_aggregate(self, info, statuses=None, status=None, **kwargs):
+        query = Query._build_claim_queryset_for_aggregate(
+            info,
+            statuses=statuses,
+            status=status,
+            **kwargs,
+        )
+        
+        query = query.only('id', 'status')
+        
+        aggregates = (
+            query.values("status")
+            .annotate(count=Count("id"))
+            .order_by()
+        )
+
+        requested_statuses = []
+        if statuses:
+            requested_statuses = list(dict.fromkeys(statuses))
+        elif status is not None:
+            requested_statuses = [status]
+
+        counts_map = {}
+        for row in aggregates:
+            counts_map[row["status"]] = row["count"]
+
+        if requested_statuses:
+            return [
+                ClaimStatusAggregateGQLType(status=s, count=counts_map.get(s, 0))
+                for s in requested_statuses
+            ]
+
+        return [
+            ClaimStatusAggregateGQLType(status=row["status"], count=row["count"])
+            for row in aggregates
+        ]
+    
     def resolve_claim_attachments(self, info, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
