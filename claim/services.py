@@ -552,7 +552,7 @@ def validate_claim_data(data, user):
                 "max_restore": ClaimConfig.claim_max_restore
             })
            
-    elif current_claim is not None and current_claim.status not in (Claim.STATUS_CHECKED, Claim.STATUS_ENTERED):
+    elif current_claim is not None and current_claim.status not in (Claim.STATUS_CHECKED, Claim.STATUS_ENTERED, Claim.STATUS_RETURNED_FROM_BRANCH, Claim.STATUS_RETURNED_FROM_FACILITY):
         raise ValidationError(_("mutation.claim_not_editable")) 
 
     if not validate_number_of_additional_diagnoses(data):
